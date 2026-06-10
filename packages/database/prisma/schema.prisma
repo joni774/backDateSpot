@@ -1,0 +1,85 @@
+// Prisma schema for DateSpot — PostgreSQL database models.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SubscriptionTier {
+  FREE
+  PREMIUM
+  VIP
+}
+
+enum PlaceCategory {
+  ROMANTIC_DATE
+  RESTAURANT
+  DAIRY_RESTAURANT
+  MEAT_RESTAURANT
+  SUSHI
+  SUNSET
+  ATTRACTION
+}
+
+enum PriceRange {
+  FREE
+  BUDGET
+  MODERATE
+  EXPENSIVE
+}
+
+// App users: registration, login, subscription tier, admin flag.
+model User {
+  id               String           @id @default(uuid())
+  fullName         String
+  age              Int
+  phone            String           @unique
+  email            String           @unique
+  passwordHash     String
+  subscriptionTier SubscriptionTier @default(FREE)
+  isAdmin          Boolean          @default(false)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  savedPlaces      SavedPlace[]
+}
+
+// Date spots: restaurants, romantic places, sunset views, attractions.
+model Place {
+  id             String        @id @default(uuid())
+  nameHe         String
+  nameEn         String
+  nameAr         String
+  descriptionHe  String
+  descriptionEn  String
+  descriptionAr  String
+  category       PlaceCategory
+  latitude       Float
+  longitude      Float
+  address        String
+  priceRange     PriceRange
+  images         String[]
+  openingHours   Json
+  phone          String?
+  website        String?
+  isActive       Boolean       @default(true)
+  displayOrder   Int           @default(0)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  savedBy        SavedPlace[]
+}
+
+// User bookmarked places.
+model SavedPlace {
+  id      String   @id @default(uuid())
+  userId  String
+  placeId String
+  savedAt DateTime @default(now())
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  place   Place    @relation(fields: [placeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, placeId])
+}

@@ -1,0 +1,30 @@
+# Local PostgreSQL + Redis for development. Requires Docker Desktop.
+# Usage: docker compose up -d
+# Then: cp apps/api/.env.example apps/api/.env && pnpm db:migrate && pnpm db:seed
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: datespot-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: datespot_dev
+    volumes:
+      - datespot_pg_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: datespot-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - datespot_redis_data:/data
+
+volumes:
+  datespot_pg_data:
+  datespot_redis_data:
