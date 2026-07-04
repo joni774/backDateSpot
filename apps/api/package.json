@@ -9,7 +9,10 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@datespot/admin-logic": "workspace:*",
+    "@datespot/auth-logic": "workspace:*",
     "@datespot/database": "workspace:*",
+    "@datespot/places-logic": "workspace:*",
     "@datespot/shared-types": "workspace:*",
     "@datespot/utils": "workspace:*",
     "bcrypt": "^5.1.1",

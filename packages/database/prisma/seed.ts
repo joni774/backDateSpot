@@ -250,7 +250,8 @@ const places = [
 ];
 
 async function main() {
-  const passwordHash = await bcrypt.hash("admin123", 12);
+  const adminPasswordHash = await bcrypt.hash("admin123", 12);
+  const freePasswordHash = await bcrypt.hash("free123", 12);
 
   await prisma.user.upsert({
     where: { email: "admin@datespot.co.il" },
@@ -260,9 +261,23 @@ async function main() {
       age: 30,
       phone: "0500000000",
       email: "admin@datespot.co.il",
-      passwordHash,
+      passwordHash: adminPasswordHash,
       subscriptionTier: "VIP",
       isAdmin: true,
+    },
+  });
+
+  await prisma.user.upsert({
+    where: { email: "free@datespot.co.il" },
+    update: {},
+    create: {
+      fullName: "Free User",
+      age: 25,
+      phone: "0500000001",
+      email: "free@datespot.co.il",
+      passwordHash: freePasswordHash,
+      subscriptionTier: "FREE",
+      isAdmin: false,
     },
   });
 
@@ -277,7 +292,9 @@ async function main() {
     });
   }
 
-  console.log("Seed complete: admin@datespot.co.il / admin123 + 13 Tel Aviv places");
+  console.log(
+    "Seed complete: admin@datespot.co.il / admin123, free@datespot.co.il / free123 + 13 Tel Aviv places"
+  );
 }
 
 main()

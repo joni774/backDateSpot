@@ -1,5 +1,3 @@
-// Place helpers: localization, open-hours check (Israel timezone).
-
 import type { Place, PlaceCategory, PriceRange } from "@datespot/database";
 
 type Language = "he" | "en" | "ar";
@@ -28,7 +26,6 @@ export function localizePlace(
   }
 }
 
-/** Whether the place is open now based on openingHours JSON (Asia/Jerusalem). */
 export function isPlaceOpenNow(openingHours: unknown): boolean {
   if (!openingHours || typeof openingHours !== "object") return false;
   const hours = openingHours as Record<string, string>;
@@ -38,10 +35,8 @@ export function isPlaceOpenNow(openingHours: unknown): boolean {
   const dayKey = DAY_KEYS[now.getDay()];
   const todayHours = hours[dayKey];
   if (!todayHours || todayHours.toLowerCase() === "closed") return false;
-
   const match = todayHours.match(/(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/);
   if (!match) return false;
-
   const [, sh, sm, eh, em] = match;
   const start = parseInt(sh!, 10) * 60 + parseInt(sm!, 10);
   const end = parseInt(eh!, 10) * 60 + parseInt(em!, 10);

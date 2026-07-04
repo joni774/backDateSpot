@@ -8,7 +8,10 @@
     "lint": "turbo lint",
     "db:migrate": "pnpm --filter @datespot/database exec prisma migrate deploy",
     "db:seed": "pnpm --filter @datespot/database exec prisma db seed",
-    "e2e": "node scripts/e2e-verify.mjs",
+    "db:init:docker": "docker compose run --rm db-init",
+    "docker:dev": "docker compose --profile dev up --build",
+    "docker:microservices": "docker compose --profile microservices up --build",
+    "e2e": "node ../e2e/api/verify.mjs",
     "setup:local": "powershell -ExecutionPolicy Bypass -File scripts/setup-local.ps1"
   },
   "devDependencies": {

@@ -1,3 +1,5 @@
+import { randomBytes } from "crypto";
+
 // Shared helper utilities for the DateSpot server monorepo.
 
 /** Haversine formula: distance in km between two GPS coordinates. */
@@ -24,13 +26,7 @@ function toRad(deg: number): number {
   return (deg * Math.PI) / 180;
 }
 
-/** Generate a random alphanumeric password of given length. */
-export function generateRandomPassword(length = 8): string {
-  const chars =
-    "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
-  let result = "";
-  for (let i = 0; i < length; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return result;
+/** Generate a cryptographically random hex password (12 hex chars = 6 bytes). */
+export function generateRandomPassword(_length = 8): string {
+  return randomBytes(6).toString("hex");
 }

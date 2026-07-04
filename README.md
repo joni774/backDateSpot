@@ -2,6 +2,32 @@
 
 Turborepo monorepo for the DateSpot API backend.
 
+See [datespot-client/README.md](../datespot-client/README.md) for the Expo mobile app.
+
+## Documentation
+
+| Doc | Purpose |
+|-----|---------|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Monorepo map, dependencies, where to change what |
+| [AGENTS.md](AGENTS.md) | Instructions for AI coding agents |
+| [apps/api/README.md](apps/api/README.md) | Monolith API (local dev) |
+| [apps/auth-service/README.md](apps/auth-service/README.md) | Auth microservice |
+| [apps/places-service/README.md](apps/places-service/README.md) | Places microservice |
+| [apps/admin-service/README.md](apps/admin-service/README.md) | Admin microservice |
+| [apps/gateway/README.md](apps/gateway/README.md) | nginx gateway (Docker) |
+| [packages/database/README.md](packages/database/README.md) | Prisma schema, migrations, seed |
+| [packages/shared-types/README.md](packages/shared-types/README.md) | TypeScript types (synced with client) |
+| [packages/utils/README.md](packages/utils/README.md) | Shared helpers |
+
+## Dual runtime modes
+
+| Mode | Command | What runs |
+|------|---------|-----------|
+| **Local dev (monolith)** | `pnpm dev` | [apps/api](apps/api) — all routes on port 3000 |
+| **Docker (microservices)** | `docker compose up --build` | auth, places, admin services + [gateway](apps/gateway) on port 3000 |
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full request flow and sync rules between modes.
+
 ## Architecture / Tech stack (PRD section 9)
 
 | Area | Technology | Status |
@@ -39,7 +65,11 @@ Turborepo monorepo for the DateSpot API backend.
 
 | Path | Description |
 |------|-------------|
-| `apps/api` | Express + TypeScript REST API (port 3000) |
+| `apps/api` | Express monolith for local dev (port 3000) |
+| `apps/auth-service` | Auth microservice (port 3001, internal) |
+| `apps/places-service` | Places microservice (port 3002, internal) |
+| `apps/admin-service` | Admin microservice (port 3003, internal) |
+| `apps/gateway` | nginx reverse proxy (port 3000 external in Docker) |
 | `packages/database` | Prisma schema, migrations, seed |
 | `packages/shared-types` | Shared TypeScript types |
 | `packages/utils` | Haversine distance, password generation |
@@ -62,13 +92,16 @@ cp apps/api/.env.example apps/api/.env
 4. Start PostgreSQL + Redis (choose one):
 
 ```bash
-# Option A: Docker (from datespot-server/ or project root)
-docker compose up -d
+# Option A: Docker microservices (recommended for mobile client)
+docker compose up --build
+# Migrations + seed run automatically via the db-init container.
+# Admin login: admin@datespot.co.il / admin123
+# Free-tier test user: free@datespot.co.il / free123
 
 # Option B: Local PostgreSQL on port 5432 with database datespot_dev
 ```
 
-5. Run migrations and seed:
+5. Run migrations and seed (**Option B only** — Docker runs these via `db-init`):
 
 ```bash
 pnpm db:migrate
@@ -92,9 +125,10 @@ See also [SETUP.md](../SETUP.md) for full local workspace setup including the mo
 |---------|-------------|
 | `pnpm dev` | Run API |
 | `pnpm build` | Build all packages |
-| `pnpm db:migrate` | Apply Prisma migrations (`prisma migrate deploy`) |
-| `pnpm db:seed` | Seed 10 Tel Aviv places + admin user |
-| `pnpm e2e` | Smoke-test API endpoints (API must be running) |
+| `pnpm db:migrate` | Apply Prisma migrations locally (`apps/api` dev without Docker) |
+| `pnpm db:seed` | Seed locally (`apps/api` dev without Docker) |
+| `pnpm db:init:docker` | Re-run migrations + seed inside Docker (`db-init` container) |
+| `pnpm e2e` | API smoke shim → `../e2e/api/verify.mjs` (API must be running) |
 
 ## Environment Variables
 
@@ -125,10 +159,17 @@ Validated at startup via Zod in `apps/api/src/config/env.ts`. Only core variable
 
 ## Seed Data
 
-`pnpm db:seed` creates:
+Seed script: `packages/database/prisma/seed.ts`
+
+**Docker:** runs automatically on `docker compose up` via the `db-init` service (migrate + seed inside the container).
+
+**Local API dev (no Docker):** run `pnpm db:seed` after migrations.
+
+Creates:
 
 - **Admin:** `admin@datespot.co.il` / `admin123` (`isAdmin: true`, VIP tier)
-- **10 places** in Tel Aviv (romantic, restaurants, sunset, attractions) with he/en/ar names
+- **Free user:** `free@datespot.co.il` / `free123` (`isAdmin: false`, FREE tier — for E2E lock tests)
+- **13 places** in Tel Aviv (romantic, restaurants, sunset, attractions) with he/en/ar names
 
 ## Deploy to Railway
 
@@ -151,15 +192,21 @@ EXPO_PUBLIC_API_URL=https://your-app.up.railway.app
 
 ## E2E Verification
 
+API smoke tests live in the sibling [`e2e/`](../e2e/) repo. From `datespot-server`, `pnpm e2e` runs the same verify script via a shim.
+
 With API running locally:
 
 ```bash
 pnpm e2e
+# Or from e2e repo:
+cd ../e2e && pnpm api
 # Or against Railway:
-API_URL=https://your-app.up.railway.app pnpm e2e
+API_URL=https://your-app.up.railway.app node ../e2e/api/verify.mjs
 ```
 
-Checks: health, admin login, places list, FREE lock logic, place detail, admin stats.
+Full E2E (API + Playwright web): see [e2e/README.md](../e2e/README.md).
+
+Checks: health, admin login, places list, save/saved/unsave, FREE user lock, place detail, admin stats.
 
 ## Notes
 
