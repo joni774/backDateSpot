@@ -5,7 +5,8 @@
     "dockerfilePath": "Dockerfile"
   },
   "deploy": {
-    "startCommand": "node apps/api/dist/index.js",
+    "preDeployCommand": null,
+    "startCommand": null,
     "healthcheckPath": "/health"
   }
 }
