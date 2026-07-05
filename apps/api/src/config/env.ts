@@ -15,6 +15,9 @@ const envSchema = z.object({
     .describe("Origins for web clients (optional). Comma-separated; * in dev."),
   SENDGRID_API_KEY: z.string().optional(),
   REDIS_URL: z.string().optional(),
+  GOOGLE_PLACES_API_KEY: z.string().optional(),
+  GOOGLE_MAPS_API_KEY: z.string().optional(),
+  PUBLIC_API_URL: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

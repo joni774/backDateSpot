@@ -21,6 +21,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-datespot_dev}
     volumes:
       - datespot_pg_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
     networks:
       - internal
     healthcheck:
@@ -74,6 +76,9 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-datespot_dev}
       JWT_SECRET: ${JWT_SECRET}
       SENDGRID_API_KEY: ${SENDGRID_API_KEY}
+      GOOGLE_PLACES_API_KEY: ${GOOGLE_PLACES_API_KEY:-}
+      GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -135,6 +140,9 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-datespot_dev}
       JWT_SECRET: ${JWT_SECRET}
       REDIS_URL: redis://redis:6379
+      GOOGLE_PLACES_API_KEY: ${GOOGLE_PLACES_API_KEY:-}
+      GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-}
     depends_on:
       postgres:
         condition: service_healthy

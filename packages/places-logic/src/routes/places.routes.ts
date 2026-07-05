@@ -1,4 +1,4 @@
-import { Router, type RequestHandler } from "express";
+import { Router, type Request, type RequestHandler } from "express";
 import { z } from "zod";
 import {
   prisma,
@@ -13,6 +13,10 @@ import {
   noopPlacesListCache,
   type PlacesListCache,
 } from "../cache";
+import {
+  buildGooglePhotoFetchUrl,
+  resolvePlaceImageUrls,
+} from "../google-places";
 import { placeCategorySchema } from "../schemas/place.schema";
 import { isPlaceOpenNow, localizePlace } from "../utils/place.util";
 
@@ -40,11 +44,20 @@ function radiusToBoundingBox(lat: number, lng: number, radiusKm: number) {
   };
 }
 
+function getRequestBaseUrl(req: Request, publicApiUrl?: string): string {
+  if (publicApiUrl) return publicApiUrl.replace(/\/$/, "");
+  const forwarded = req.get("x-forwarded-proto");
+  const proto = forwarded ? forwarded.split(",")[0].trim() : req.protocol;
+  const host = req.get("x-forwarded-host") ?? req.get("host") ?? "localhost:3000";
+  return `${proto}://${host}`;
+}
+
 function mapPlaceListItem(
   place: Place,
   language: "he" | "en" | "ar",
   distance: number | null,
-  isLocked = false
+  isLocked = false,
+  baseUrl?: string
 ) {
   const { name, description } = localizePlace(place, language);
   return {
@@ -54,7 +67,7 @@ function mapPlaceListItem(
     category: place.category,
     distance,
     priceRange: place.priceRange,
-    images: place.images,
+    images: baseUrl ? resolvePlaceImageUrls(place.images, baseUrl) : place.images,
     openingHours: place.openingHours as Record<string, string>,
     isLocked,
   };
@@ -64,6 +77,8 @@ export interface PlacesRouterConfig {
   optionalAuth: RequestHandler;
   verifyTokenMiddleware: RequestHandler;
   cache?: PlacesListCache;
+  googlePlacesApiKey?: string;
+  publicApiUrl?: string;
 }
 
 export function createPlacesRouter(config: PlacesRouterConfig): Router {
@@ -78,6 +93,7 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
   router.get("/", config.optionalAuth, async (req, res) => {
     try {
       const query = listQuerySchema.parse(req.query);
+      const baseUrl = getRequestBaseUrl(req, config.publicApiUrl);
       const tier = req.user?.subscriptionTier ?? SubscriptionTier.FREE;
       const isPremium =
         tier === SubscriptionTier.PREMIUM || tier === SubscriptionTier.VIP;
@@ -131,7 +147,7 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
 
       const results = filtered.map(({ place, distance }, index) => {
         const isLocked = !isPremium && index >= 5;
-        return mapPlaceListItem(place, query.language, distance, isLocked);
+        return mapPlaceListItem(place, query.language, distance, isLocked, baseUrl);
       });
 
       res.json({ places: results });
@@ -147,6 +163,7 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
 
   router.get("/saved", config.verifyTokenMiddleware, async (req, res) => {
     try {
+      const baseUrl = getRequestBaseUrl(req, config.publicApiUrl);
       const language =
         (req.query.language as "he" | "en" | "ar" | undefined) ?? "he";
       const saved = await prisma.savedPlace.findMany({
@@ -156,7 +173,7 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
       });
       const places = saved
         .filter((s) => s.place.isActive)
-        .map((s) => mapPlaceListItem(s.place, language, null));
+        .map((s) => mapPlaceListItem(s.place, language, null, false, baseUrl));
       res.json({ places });
     } catch (err) {
       console.error(err);
@@ -216,12 +233,46 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
     }
   });
 
+  router.get("/photo", async (req, res) => {
+    try {
+      const ref = z.string().min(1).parse(req.query.ref);
+      const apiKey = config.googlePlacesApiKey;
+      if (!apiKey) {
+        res.status(503).json({ error: "Google Places photo service unavailable" });
+        return;
+      }
+
+      const photoUrl = buildGooglePhotoFetchUrl(ref, apiKey);
+      const photoRes = await fetch(photoUrl, { redirect: "follow" });
+      if (!photoRes.ok) {
+        res.status(502).json({ error: "Failed to fetch place photo" });
+        return;
+      }
+
+      res.set(
+        "Content-Type",
+        photoRes.headers.get("content-type") ?? "image/jpeg"
+      );
+      res.set("Cache-Control", "public, max-age=86400");
+      const buffer = Buffer.from(await photoRes.arrayBuffer());
+      res.send(buffer);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        res.status(400).json({ error: "Invalid photo reference" });
+        return;
+      }
+      console.error(err);
+      res.status(500).json({ error: "Failed to fetch place photo" });
+    }
+  });
+
   /**
    * GET /:id — full place details.
    * Freemium gate: FREE users cannot access places beyond index 5 (isLocked).
    */
   router.get("/:id", config.optionalAuth, async (req, res) => {
     try {
+      const baseUrl = getRequestBaseUrl(req, config.publicApiUrl);
       const id = z.string().uuid().parse(req.params.id);
       const language =
         (req.query.language as "he" | "en" | "ar" | undefined) ?? "he";
@@ -264,7 +315,7 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
         longitude: place.longitude,
         address: place.address,
         priceRange: place.priceRange,
-        images: place.images,
+        images: resolvePlaceImageUrls(place.images, baseUrl),
         openingHours: place.openingHours,
         phone: place.phone,
         website: place.website,

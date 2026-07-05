@@ -6,6 +6,9 @@ const envSchema = z.object({
   PORT: z.coerce.number().default(3002),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   REDIS_URL: z.string().optional(),
+  GOOGLE_PLACES_API_KEY: z.string().optional(),
+  GOOGLE_MAPS_API_KEY: z.string().optional(),
+  PUBLIC_API_URL: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

@@ -8,6 +8,8 @@
     "lint": "turbo lint",
     "db:migrate": "pnpm --filter @datespot/database exec prisma migrate deploy",
     "db:seed": "pnpm --filter @datespot/database exec prisma db seed",
+    "db:import-places": "pnpm --filter @datespot/database exec tsx scripts/import-places-osm.ts",
+    "db:enrich-photos": "pnpm --filter @datespot/database exec tsx scripts/enrich-place-photos.ts",
     "db:init:docker": "docker compose run --rm db-init",
     "docker:dev": "docker compose --profile dev up --build",
     "docker:microservices": "docker compose --profile microservices up --build",

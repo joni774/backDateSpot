@@ -16,6 +16,7 @@ import adminRoutes from "./routes/admin.routes";
 
 const app = express();
 
+app.set("trust proxy", 1);
 app.use(helmet());
 const corsOrigins = env.CORS_ORIGIN.split(",").map((o) => o.trim());
 app.use(

@@ -8,6 +8,7 @@ import placesRoutes from "./routes/places.routes";
 
 const app = express();
 
+app.set("trust proxy", 1);
 app.use(helmet());
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
