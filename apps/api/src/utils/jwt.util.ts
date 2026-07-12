@@ -15,5 +15,9 @@ export function generateToken(userId: string, isAdmin: boolean): string {
 }
 
 export function verifyToken(token: string): JwtPayload {
-  return jwt.verify(token, env.JWT_SECRET) as JwtPayload;
+  const payload = jwt.verify(token, env.JWT_SECRET) as JwtPayload & { type?: string };
+  if (payload.type === "refresh") {
+    throw new Error("Invalid token type");
+  }
+  return payload;
 }

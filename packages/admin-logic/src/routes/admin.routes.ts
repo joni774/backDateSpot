@@ -9,6 +9,15 @@ import {
 import { placeCategorySchema } from "@datespot/places-logic";
 import { noopAdminCacheHooks, type AdminCacheHooks } from "../cache";
 
+const optionalUrl = z
+  .string()
+  .optional()
+  .transform((v) => {
+    if (!v || !v.trim()) return null;
+    return v.trim();
+  })
+  .refine((v) => v == null || /^https?:\/\//i.test(v), { message: "Invalid URL" });
+
 const placeBodySchema = z.object({
   nameHe: z.string().min(1),
   nameEn: z.string().min(1),
@@ -25,6 +34,9 @@ const placeBodySchema = z.object({
   openingHours: z.record(z.string()),
   phone: z.string().optional(),
   website: z.string().optional(),
+  deliveryWoltUrl: optionalUrl,
+  deliveryTenBisUrl: optionalUrl,
+  deliveryMishlohaUrl: optionalUrl,
   isActive: z.boolean().optional(),
   displayOrder: z.number().int().optional(),
 });
@@ -52,7 +64,7 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
       const [totalUsers, weeklyActiveUsers, premiumUsers, vipUsers, totalPlaces] =
         await Promise.all([
           prisma.user.count(),
-          prisma.user.count({ where: { updatedAt: { gte: weekAgo } } }),
+          prisma.user.count({ where: { lastLoginAt: { gte: weekAgo } } }),
           prisma.user.count({
             where: { subscriptionTier: SubscriptionTier.PREMIUM },
           }),
@@ -105,7 +117,7 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
         orderBy: { displayOrder: "asc" },
       });
 
-      res.json({ places: places.map((p) => ({ ...p, viewCount: 0 })) });
+      res.json({ places });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: "Failed to fetch places" });

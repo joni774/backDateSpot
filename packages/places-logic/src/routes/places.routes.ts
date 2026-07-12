@@ -26,10 +26,16 @@ const listQuerySchema = z.object({
   lng: z.coerce.number().optional(),
   radius: z.coerce.number().default(10),
   language: z.enum(["he", "en", "ar"]).default("he"),
+  q: z.string().min(1).optional(),
 });
 
 const saveSchema = z.object({
   placeId: z.string().uuid(),
+});
+
+const reviewSchema = z.object({
+  rating: z.number().int().min(1).max(5),
+  text: z.string().max(1000).optional(),
 });
 
 /** Bounding-box padding in degrees (~1 deg ≈ 111 km). */
@@ -70,6 +76,8 @@ function mapPlaceListItem(
     images: baseUrl ? resolvePlaceImageUrls(place.images, baseUrl) : place.images,
     openingHours: place.openingHours as Record<string, string>,
     isLocked,
+    latitude: place.latitude,
+    longitude: place.longitude,
   };
 }
 
@@ -95,8 +103,7 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
       const query = listQuerySchema.parse(req.query);
       const baseUrl = getRequestBaseUrl(req, config.publicApiUrl);
       const tier = req.user?.subscriptionTier ?? SubscriptionTier.FREE;
-      const isPremium =
-        tier === SubscriptionTier.PREMIUM || tier === SubscriptionTier.VIP;
+      const isVip = tier === SubscriptionTier.VIP;
 
       const cacheKey = `${PLACES_LIST_KEY}:${query.category ?? "all"}:${query.lat ?? ""}:${query.lng ?? ""}:${query.radius}`;
 
@@ -136,6 +143,23 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
       });
 
       let filtered = withDistance;
+      if (query.q) {
+        const q = query.q.toLowerCase();
+        filtered = filtered.filter(({ place }) => {
+          const haystack = [
+            place.nameHe,
+            place.nameEn,
+            place.nameAr,
+            place.descriptionHe,
+            place.descriptionEn,
+            place.descriptionAr,
+            place.address,
+          ]
+            .join(" ")
+            .toLowerCase();
+          return haystack.includes(q);
+        });
+      }
       if (query.lat != null && query.lng != null) {
         filtered = withDistance.filter(
           (p) => p.distance === null || p.distance <= query.radius
@@ -146,7 +170,7 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
       }
 
       const results = filtered.map(({ place, distance }, index) => {
-        const isLocked = !isPremium && index >= 5;
+        const isLocked = !isVip && index >= 5;
         return mapPlaceListItem(place, query.language, distance, isLocked, baseUrl);
       });
 
@@ -233,6 +257,78 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
     }
   });
 
+  router.get("/favorites", config.verifyTokenMiddleware, async (req, res) => {
+    try {
+      const baseUrl = getRequestBaseUrl(req, config.publicApiUrl);
+      const language =
+        (req.query.language as "he" | "en" | "ar" | undefined) ?? "he";
+      const favorites = await prisma.favorite.findMany({
+        where: { userId: req.user!.userId },
+        include: { place: true },
+        orderBy: { createdAt: "desc" },
+      });
+      const places = favorites
+        .filter((f) => f.place.isActive)
+        .map((f) => mapPlaceListItem(f.place, language, null, false, baseUrl));
+      res.json({ places });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Failed to fetch favorites" });
+    }
+  });
+
+  router.post("/favorites", config.verifyTokenMiddleware, async (req, res) => {
+    try {
+      const body = saveSchema.parse(req.body);
+      const place = await prisma.place.findUnique({ where: { id: body.placeId } });
+      if (!place || !place.isActive) {
+        res.status(404).json({ error: "Place not found" });
+        return;
+      }
+      const existing = await prisma.favorite.findUnique({
+        where: {
+          userId_placeId: { userId: req.user!.userId, placeId: body.placeId },
+        },
+      });
+      if (existing) {
+        res.status(409).json({ error: "Place already in favorites" });
+        return;
+      }
+      await prisma.favorite.create({
+        data: { userId: req.user!.userId, placeId: body.placeId },
+      });
+      res.status(201).json({ message: "Added to favorites" });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        res.status(400).json({ error: err.flatten() });
+        return;
+      }
+      console.error(err);
+      res.status(500).json({ error: "Failed to add favorite" });
+    }
+  });
+
+  router.delete("/favorites/:placeId", config.verifyTokenMiddleware, async (req, res) => {
+    try {
+      const placeId = z.string().uuid().parse(req.params.placeId);
+      const deleted = await prisma.favorite.deleteMany({
+        where: { userId: req.user!.userId, placeId },
+      });
+      if (deleted.count === 0) {
+        res.status(404).json({ error: "Favorite not found" });
+        return;
+      }
+      res.json({ message: "Removed from favorites" });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        res.status(400).json({ error: "Invalid place id" });
+        return;
+      }
+      console.error(err);
+      res.status(500).json({ error: "Failed to remove favorite" });
+    }
+  });
+
   router.get("/photo", async (req, res) => {
     try {
       const ref = z.string().min(1).parse(req.query.ref);
@@ -266,9 +362,76 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
     }
   });
 
+  router.get("/:id/reviews", async (req, res) => {
+    try {
+      const id = z.string().uuid().parse(req.params.id);
+      const reviews = await prisma.review.findMany({
+        where: { placeId: id },
+        include: { user: { select: { fullName: true } } },
+        orderBy: { createdAt: "desc" },
+        take: 50,
+      });
+      const avg = await prisma.review.aggregate({
+        where: { placeId: id },
+        _avg: { rating: true },
+        _count: { rating: true },
+      });
+      res.json({
+        reviews: reviews.map((r) => ({
+          id: r.id,
+          rating: r.rating,
+          text: r.text,
+          userName: r.user.fullName,
+          createdAt: r.createdAt.toISOString(),
+        })),
+        averageRating: avg._avg.rating ?? null,
+        reviewCount: avg._count.rating,
+      });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        res.status(400).json({ error: "Invalid place id" });
+        return;
+      }
+      console.error(err);
+      res.status(500).json({ error: "Failed to fetch reviews" });
+    }
+  });
+
+  router.post("/:id/reviews", config.verifyTokenMiddleware, async (req, res) => {
+    try {
+      const id = z.string().uuid().parse(req.params.id);
+      const body = reviewSchema.parse(req.body);
+      const place = await prisma.place.findUnique({ where: { id } });
+      if (!place || !place.isActive) {
+        res.status(404).json({ error: "Place not found" });
+        return;
+      }
+      const review = await prisma.review.upsert({
+        where: {
+          userId_placeId: { userId: req.user!.userId, placeId: id },
+        },
+        create: {
+          userId: req.user!.userId,
+          placeId: id,
+          rating: body.rating,
+          text: body.text,
+        },
+        update: { rating: body.rating, text: body.text },
+      });
+      res.status(201).json({ review });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        res.status(400).json({ error: err.flatten() });
+        return;
+      }
+      console.error(err);
+      res.status(500).json({ error: "Failed to submit review" });
+    }
+  });
+
   /**
    * GET /:id — full place details.
-   * Freemium gate: FREE users cannot access places beyond index 5 (isLocked).
+   * Freemium gate: FREE users cannot access places beyond index 5; VIP unlocks all.
    */
   router.get("/:id", config.optionalAuth, async (req, res) => {
     try {
@@ -283,26 +446,43 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
       }
 
       const tier = req.user?.subscriptionTier ?? SubscriptionTier.FREE;
-      const isPremium =
-        tier === SubscriptionTier.PREMIUM || tier === SubscriptionTier.VIP;
-      if (!isPremium) {
+      if (tier !== SubscriptionTier.VIP) {
         const rank = await prisma.place.count({
           where: { isActive: true, displayOrder: { lt: place.displayOrder } },
         });
         if (rank >= 5) {
-          res.status(403).json({ error: "Premium required" });
+          res.status(403).json({ error: "VIP required" });
           return;
         }
       }
 
+      await prisma.place.update({
+        where: { id },
+        data: { viewCount: { increment: 1 } },
+      });
+
       const { name, description } = localizePlace(place, language);
       let isSaved = false;
+      let isFavorite = false;
       if (req.user) {
-        const saved = await prisma.savedPlace.findUnique({
-          where: { userId_placeId: { userId: req.user.userId, placeId: id } },
-        });
+        const [saved, favorite] = await Promise.all([
+          prisma.savedPlace.findUnique({
+            where: { userId_placeId: { userId: req.user.userId, placeId: id } },
+          }),
+          prisma.favorite.findUnique({
+            where: { userId_placeId: { userId: req.user.userId, placeId: id } },
+          }),
+        ]);
         isSaved = !!saved;
+        isFavorite = !!favorite;
       }
+
+      const ratingAgg = await prisma.review.aggregate({
+        where: { placeId: id },
+        _avg: { rating: true },
+        _count: { rating: true },
+      });
+
       res.json({
         id: place.id,
         name,
@@ -319,8 +499,15 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
         openingHours: place.openingHours,
         phone: place.phone,
         website: place.website,
+        deliveryWoltUrl: place.deliveryWoltUrl,
+        deliveryTenBisUrl: place.deliveryTenBisUrl,
+        deliveryMishlohaUrl: place.deliveryMishlohaUrl,
         isOpen: isPlaceOpenNow(place.openingHours),
         isSaved,
+        isFavorite,
+        viewCount: place.viewCount + 1,
+        averageRating: ratingAgg._avg.rating ?? null,
+        reviewCount: ratingAgg._count.rating,
       });
     } catch (err) {
       if (err instanceof z.ZodError) {

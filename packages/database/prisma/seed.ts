@@ -62,6 +62,9 @@ const places = [
     openingHours: defaultHours,
     phone: "03-5174777",
     website: "https://www.messa-rest.co.il",
+    deliveryWoltUrl: "https://wolt.com/he/isr/tel-aviv",
+    deliveryTenBisUrl: "https://www.tenbis.co.il/",
+    deliveryMishlohaUrl: "https://www.mishloha.co.il/",
     displayOrder: 3,
   },
   {
@@ -269,7 +272,13 @@ async function main() {
 
   await prisma.user.upsert({
     where: { email: "free@datespot.co.il" },
-    update: {},
+    update: {
+      ageVerifiedAt: new Date(),
+      isVisibleNearby: true,
+      nearbyLat: 32.086,
+      nearbyLng: 34.782,
+      nearbyUpdatedAt: new Date(),
+    },
     create: {
       fullName: "Free User",
       age: 25,
@@ -278,6 +287,11 @@ async function main() {
       passwordHash: freePasswordHash,
       subscriptionTier: "FREE",
       isAdmin: false,
+      ageVerifiedAt: new Date(),
+      isVisibleNearby: true,
+      nearbyLat: 32.086,
+      nearbyLng: 34.782,
+      nearbyUpdatedAt: new Date(),
     },
   });
 

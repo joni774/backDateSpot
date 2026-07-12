@@ -13,6 +13,8 @@ import { env } from "./config/env";
 import authRoutes from "./routes/auth.routes";
 import placesRoutes from "./routes/places.routes";
 import adminRoutes from "./routes/admin.routes";
+import aiRoutes from "./routes/ai.routes";
+import nearbyRoutes from "./routes/nearby.routes";
 
 const app = express();
 
@@ -38,6 +40,8 @@ app.get("/health", (_req, res) => {
 app.use("/api/auth", authRoutes);
 app.use("/api/places", placesRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/nearby", nearbyRoutes);
+app.use("/api/ai", aiRoutes);
 
 app.use((_req, res) => {
   res.status(404).json({ error: "Not found" });

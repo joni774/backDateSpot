@@ -13,6 +13,7 @@ enum SubscriptionTier {
   FREE
   PREMIUM
   VIP
+  DATING
 }
 
 enum PlaceCategory {
@@ -39,12 +40,50 @@ model User {
   age              Int
   phone            String           @unique
   email            String           @unique
-  passwordHash     String
+  passwordHash     String?
   subscriptionTier SubscriptionTier @default(FREE)
   isAdmin          Boolean          @default(false)
+  lastLoginAt      DateTime?
+  phoneVerified    Boolean          @default(false)
+  onboardingDone   Boolean          @default(false)
+  googleId         String?          @unique
+  appleId          String?          @unique
+  expoPushToken    String?
+  ageVerifiedAt    DateTime?
+  isVisibleNearby  Boolean          @default(false)
+  nearbyLat        Float?
+  nearbyLng        Float?
+  nearbyUpdatedAt  DateTime?
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
   savedPlaces      SavedPlace[]
+  refreshTokens    RefreshToken[]
+  passwordResets   PasswordResetToken[]
+  otpCodes         OtpCode[]
+  reviews          Review[]
+  favorites        Favorite[]
+  payments         Payment[]
+  sentInterests     NearbyInterest[] @relation("SentInterests")
+  receivedInterests NearbyInterest[] @relation("ReceivedInterests")
+  blocksMade        NearbyBlock[]    @relation("BlocksMade")
+  blocksReceived    NearbyBlock[]    @relation("BlocksReceived")
+  aiChatSessions    AiChatSession[]
+}
+
+// In-app subscription payments (card checkout; gateway can replace mock provider later).
+model Payment {
+  id           String           @id @default(uuid())
+  userId       String
+  tier         SubscriptionTier
+  amountAgorot Int
+  currency     String           @default("ILS")
+  provider     String           @default("card")
+  status       String           @default("succeeded")
+  last4        String?
+  createdAt    DateTime         @default(now())
+  user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 // Date spots: restaurants, romantic places, sunset views, attractions.
@@ -65,14 +104,20 @@ model Place {
   openingHours   Json
   phone          String?
   website        String?
+  deliveryWoltUrl     String?
+  deliveryTenBisUrl   String?
+  deliveryMishlohaUrl String?
   isActive       Boolean       @default(true)
   displayOrder   Int           @default(0)
+  viewCount      Int           @default(0)
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
   savedBy        SavedPlace[]
+  reviews        Review[]
+  favorites      Favorite[]
 }
 
-// User bookmarked places.
+// User bookmarked places (heart / saved list).
 model SavedPlace {
   id      String   @id @default(uuid())
   userId  String
@@ -82,4 +127,125 @@ model SavedPlace {
   place   Place    @relation(fields: [placeId], references: [id], onDelete: Cascade)
 
   @@unique([userId, placeId])
+}
+
+// Separate favorites list (distinct from saved/bookmark).
+model Favorite {
+  id        String   @id @default(uuid())
+  userId    String
+  placeId   String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  place     Place    @relation(fields: [placeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, placeId])
+}
+
+// Place reviews and star ratings.
+model Review {
+  id        String   @id @default(uuid())
+  userId    String
+  placeId   String
+  rating    Int
+  text      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  place     Place    @relation(fields: [placeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, placeId])
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  token     String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model OtpCode {
+  id        String   @id @default(uuid())
+  userId    String?
+  phone     String
+  code      String
+  expiresAt DateTime
+  verified  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// Nearby people: interest expressed by one user toward another.
+model NearbyInterest {
+  id         String   @id @default(uuid())
+  fromUserId String
+  toUserId   String
+  createdAt  DateTime @default(now())
+  fromUser   User     @relation("SentInterests", fields: [fromUserId], references: [id], onDelete: Cascade)
+  toUser     User     @relation("ReceivedInterests", fields: [toUserId], references: [id], onDelete: Cascade)
+
+  @@unique([fromUserId, toUserId])
+}
+
+// Nearby people: block list.
+model NearbyBlock {
+  id        String   @id @default(uuid())
+  blockerId String
+  blockedId String
+  createdAt DateTime @default(now())
+  blocker   User     @relation("BlocksMade", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked   User     @relation("BlocksReceived", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  @@unique([blockerId, blockedId])
+}
+
+// Nearby people: user reports (moderation queue).
+model NearbyReport {
+  id         String   @id @default(uuid())
+  reporterId String
+  reportedId String
+  reason     String?
+  createdAt  DateTime @default(now())
+}
+
+// AI date planner chat sessions.
+model AiChatSession {
+  id        String          @id @default(uuid())
+  userId    String
+  context   Json            @default("{}")
+  language  String          @default("he")
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages  AiChatMessage[]
+}
+
+model AiChatMessage {
+  id              String        @id @default(uuid())
+  sessionId       String
+  role            String
+  content         String
+  recommendations Json?
+  createdAt       DateTime      @default(now())
+  session         AiChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+}
+
+model AiDailyUsage {
+  id     String @id @default(uuid())
+  userId String
+  day    String
+  count  Int    @default(0)
+
+  @@unique([userId, day])
 }
