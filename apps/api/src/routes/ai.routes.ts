@@ -4,19 +4,23 @@ import { Router } from "express";
 import { z } from "zod";
 
 import {
+  applyQuickModeDefaults,
   botPrompt,
   botRetry,
   buildRecommendations,
+  formatQuickModeIntro,
   formatRecommendationsIntro,
   getFreeDailyLimit,
   getIsraelDayKey,
   getQuickReplies,
   moodToDefaultCategory,
   noResultsMessage,
+  normalizeAiLanguage,
   parseBudget,
   parseCategory,
   parseMood,
   parsePartySize,
+  parseQuickMode,
   parseRadius,
   quotaExceededMessage,
   quickReplyLabel,
@@ -35,7 +39,10 @@ const chatSchema = z.object({
   message: z.string().min(1).max(500),
   lat: z.number().min(-90).max(90).optional(),
   lng: z.number().min(-180).max(180).optional(),
-  language: z.enum(["he", "en", "ar"]).default("he"),
+  language: z
+    .string()
+    .optional()
+    .transform((value) => normalizeAiLanguage(value)),
 });
 
 function parseContext(raw: unknown): AiContext {
@@ -162,7 +169,7 @@ router.post("/chat", async (req, res) => {
   try {
     const body = chatSchema.parse(req.body);
     const userId = req.user!.userId;
-    const lang = body.language as AiLanguage;
+    const lang: AiLanguage = body.language ?? "he";
 
     const user = await prisma.user.findUnique({
       where: { id: userId },
@@ -197,9 +204,9 @@ router.post("/chat", async (req, res) => {
         data: { sessionId: session.id, role: "assistant", content: welcome },
       });
 
-      const isStartOnly =
-        body.message.trim().toLowerCase() === "start" ||
-        body.message.trim() === "התחל";
+      const isStartOnly = ["start", "התחל", "ابدأ", "inicio"].includes(
+        body.message.trim().toLowerCase()
+      );
 
       if (isStartOnly) {
         res.json({
@@ -237,7 +244,49 @@ router.post("/chat", async (req, res) => {
     let recommendations = null;
     let step = ctx.step;
 
-    switch (ctx.step) {
+    const quickMode = parseQuickMode(body.message);
+    const allowQuickMode =
+      !!quickMode &&
+      (body.message.trim().toLowerCase().startsWith("mode:") ||
+        ctx.step === "mood" ||
+        ctx.step === "done");
+
+    if (allowQuickMode && quickMode) {
+      if (user.subscriptionTier === "FREE") {
+        const used = await getUsageCount(userId);
+        if (used >= getFreeDailyLimit()) {
+          assistantContent = quotaExceededMessage(lang);
+          ctx.step = "done";
+          step = "done";
+        }
+      }
+
+      if (!assistantContent) {
+        ctx = applyQuickModeDefaults(quickMode, ctx);
+        const where: {
+          isActive: boolean;
+          category?: PlaceCategory;
+          priceRange?: PriceRange;
+        } = { isActive: true };
+        if (ctx.category) where.category = ctx.category;
+        if (ctx.budget) where.priceRange = ctx.budget;
+
+        const places = await prisma.place.findMany({ where });
+        const ranked = rankPlaces(places, ctx, lang);
+        recommendations = buildRecommendations(ranked);
+
+        if (!recommendations) {
+          assistantContent = noResultsMessage(lang);
+        } else {
+          assistantContent = formatQuickModeIntro(quickMode, lang);
+          if (user.subscriptionTier === "FREE") {
+            await incrementUsage(userId);
+          }
+        }
+        step = "done";
+        advanced = true;
+      }
+    } else switch (ctx.step) {
       case "mood": {
         const mood = parseMood(body.message);
         if (!mood) {

@@ -5,6 +5,18 @@ import { isPlaceOpenNow, localizePlace } from "@datespot/places-logic";
 export type AiLanguage = "he" | "en" | "ar";
 export type AiStep = "mood" | "category" | "budget" | "radius" | "partySize" | "done";
 
+const AI_LANGUAGES = new Set<AiLanguage>(["he", "en", "ar"]);
+
+/** Normalize app / Accept-Language style codes ("he-IL", "en_US") → he|en|ar. */
+export function normalizeAiLanguage(raw?: string | null): AiLanguage {
+  if (!raw) return "he";
+  const base = raw.toLowerCase().split(/[-_]/)[0]?.trim();
+  if (base && AI_LANGUAGES.has(base as AiLanguage)) {
+    return base as AiLanguage;
+  }
+  return "he";
+}
+
 export interface AiContext {
   step: AiStep;
   mood?: string;
@@ -170,7 +182,7 @@ export function botPrompt(step: AiStep, lang: AiLanguage): string {
     },
     ar: {
       mood: "مرحباً! أنا بوت DateSpot 🌙\nإلى أين تخرجون الليلة؟\n\nما الأجواء — رومانسي، مرح، هادئ، أم احتفال؟",
-      category: "رائع! أي نوع مكان؟\nمطعم، موعد رومانسي، سوشي، غروب، attraction، حليبي أو لحوم؟",
+      category: "رائع! أي نوع مكان؟\nمطعم، موعد رومانسي، سوشي، غروب، جاذبية، حليبي أو لحوم؟",
       budget: "ما الميزانية؟\nمجاني · ₪ · ₪₪ · ₪₪₪",
       radius: "كم المسافة المناسبة؟\n2 / 5 / 10 / 20 كم",
       partySize: "كم عددكم؟",
@@ -215,6 +227,105 @@ export function formatRecommendationsIntro(lang: AiLanguage, partySize: number):
   if (lang === "ar") return `وجدت أماكن رائعة لـ ${partySize}! إليك توصيتي:`;
   return `Found great spots for ${partySize}! Here's my pick:`;
 }
+
+export type AiQuickMode = "personal" | "hot";
+
+export function parseQuickMode(text: string): AiQuickMode | undefined {
+  const trimmed = text.trim();
+  const pref = parsePrefixed(trimmed, "mode");
+  if (pref === "personal" || pref === "hot") return pref;
+
+  const lower = trimmed.toLowerCase();
+
+  if (
+    includesKeyword(lower, [
+      "המלצה חמה",
+      "hot pick",
+      "hot recommendation",
+      "توصية ساخنة",
+      "עכשיו",
+      "right now",
+      "open now",
+      "פתוח עכשיו",
+      "الآن",
+    ])
+  ) {
+    return "hot";
+  }
+
+  if (
+    includesKeyword(lower, [
+      "המלצה שלי",
+      "המלצה",
+      "תמליץ",
+      "תציע",
+      "הציעי",
+      "המלץ",
+      "לאן",
+      "לאן לצאת",
+      "לאן כדאי",
+      "מקום לדייט",
+      "דייט",
+      "my pick",
+      "my recommendation",
+      "recommend",
+      "suggestion",
+      "suggest",
+      "where should",
+      "where to go",
+      "date idea",
+      "go out",
+      "توصيتي",
+      "توصية",
+      "اقترح",
+      "أين نخرج",
+      "وين",
+    ])
+  ) {
+    return "personal";
+  }
+
+  return undefined;
+}
+
+/** Instant recommend presets — skips the multi-step wizard. */
+export function applyQuickModeDefaults(
+  mode: AiQuickMode,
+  ctx: AiContext
+): AiContext {
+  if (mode === "personal") {
+    return {
+      ...ctx,
+      mood: "romantic",
+      category: "ROMANTIC_DATE",
+      budget: "MODERATE",
+      radiusKm: 10,
+      partySize: 2,
+      step: "done",
+    };
+  }
+  return {
+    ...ctx,
+    mood: "fun",
+    category: undefined,
+    budget: undefined,
+    radiusKm: 15,
+    partySize: 2,
+    step: "done",
+  };
+}
+
+export function formatQuickModeIntro(mode: AiQuickMode, lang: AiLanguage): string {
+  if (mode === "personal") {
+    if (lang === "he") return "הנה ההמלצה שלי לדייט מושלם לידך:";
+    if (lang === "ar") return "إليك توصيتي لموعد مثالي بالقرب منك:";
+    return "Here's my romantic pick near you:";
+  }
+  if (lang === "he") return "🔥 המלצה חמה — מקום פתוח וקרוב עכשיו:";
+  if (lang === "ar") return "🔥 توصية ساخنة — مكان مفتوح وقريب الآن:";
+  return "🔥 Hot pick — open and nearby right now:";
+}
+
 
 export function serializePlace(
   place: Place,
