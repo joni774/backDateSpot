@@ -17,19 +17,22 @@ export function normalizeAiLanguage(raw?: string | null): AiLanguage {
   return "he";
 }
 
-/** Prefer explicit app language; if missing, infer from message script. */
+/** Prefer message script (Hebrew/Arabic) over app setting; never infer English from Latin alone. */
 export function resolveReplyLanguage(
   preferred?: string | null,
   message?: string
 ): AiLanguage {
-  const fromApp = preferred ? normalizeAiLanguage(preferred) : null;
-  if (preferred && fromApp) return fromApp;
+  const text = (message ?? "").trim();
 
-  const text = message ?? "";
+  // User wrote Hebrew → always reply in Hebrew.
   if (/[\u0590-\u05FF]/.test(text)) return "he";
+  // User wrote Arabic → always reply in Arabic.
   if (/[\u0600-\u06FF]/.test(text)) return "ar";
-  if (/[A-Za-z]/.test(text)) return "en";
-  return fromApp ?? "he";
+
+  // Structured commands (start, mode:personal, mood:romantic…) use app language.
+  // Default is Hebrew (DateSpot primary), never auto-English from ASCII.
+  if (preferred) return normalizeAiLanguage(preferred);
+  return "he";
 }
 
 export interface AiContext {
