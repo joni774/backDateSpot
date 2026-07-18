@@ -8,6 +8,7 @@ import {
   botPrompt,
   botRetry,
   buildRecommendations,
+  findRecommendedPlaces,
   formatQuickModeIntro,
   formatRecommendationsIntro,
   getFreeDailyLimit,
@@ -15,7 +16,6 @@ import {
   getQuickReplies,
   moodToDefaultCategory,
   noResultsMessage,
-  normalizeAiLanguage,
   parseBudget,
   parseCategory,
   parseMood,
@@ -24,7 +24,7 @@ import {
   parseRadius,
   quotaExceededMessage,
   quickReplyLabel,
-  rankPlaces,
+  resolveReplyLanguage,
   type AiContext,
   type AiLanguage,
   type AiStep,
@@ -39,10 +39,7 @@ const chatSchema = z.object({
   message: z.string().min(1).max(500),
   lat: z.number().min(-90).max(90).optional(),
   lng: z.number().min(-180).max(180).optional(),
-  language: z
-    .string()
-    .optional()
-    .transform((value) => normalizeAiLanguage(value)),
+  language: z.string().optional(),
 });
 
 function parseContext(raw: unknown): AiContext {
@@ -169,7 +166,7 @@ router.post("/chat", async (req, res) => {
   try {
     const body = chatSchema.parse(req.body);
     const userId = req.user!.userId;
-    const lang: AiLanguage = body.language ?? "he";
+    const lang: AiLanguage = resolveReplyLanguage(body.language, body.message);
 
     const user = await prisma.user.findUnique({
       where: { id: userId },
@@ -263,16 +260,11 @@ router.post("/chat", async (req, res) => {
 
       if (!assistantContent) {
         ctx = applyQuickModeDefaults(quickMode, ctx);
-        const where: {
-          isActive: boolean;
-          category?: PlaceCategory;
-          priceRange?: PriceRange;
-        } = { isActive: true };
-        if (ctx.category) where.category = ctx.category;
-        if (ctx.budget) where.priceRange = ctx.budget;
-
-        const places = await prisma.place.findMany({ where });
-        const ranked = rankPlaces(places, ctx, lang);
+        const ranked = await findRecommendedPlaces(
+          (where) => prisma.place.findMany({ where }),
+          ctx,
+          lang
+        );
         recommendations = buildRecommendations(ranked);
 
         if (!recommendations) {
@@ -357,16 +349,11 @@ router.post("/chat", async (req, res) => {
             }
           }
 
-          const where: {
-            isActive: boolean;
-            category?: PlaceCategory;
-            priceRange?: PriceRange;
-          } = { isActive: true };
-          if (ctx.category) where.category = ctx.category;
-          if (ctx.budget) where.priceRange = ctx.budget;
-
-          const places = await prisma.place.findMany({ where });
-          const ranked = rankPlaces(places, ctx, lang);
+          const ranked = await findRecommendedPlaces(
+            (where) => prisma.place.findMany({ where }),
+            ctx,
+            lang
+          );
           recommendations = buildRecommendations(ranked);
 
           if (!recommendations) {

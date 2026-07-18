@@ -17,6 +17,21 @@ export function normalizeAiLanguage(raw?: string | null): AiLanguage {
   return "he";
 }
 
+/** Prefer explicit app language; if missing, infer from message script. */
+export function resolveReplyLanguage(
+  preferred?: string | null,
+  message?: string
+): AiLanguage {
+  const fromApp = preferred ? normalizeAiLanguage(preferred) : null;
+  if (preferred && fromApp) return fromApp;
+
+  const text = message ?? "";
+  if (/[\u0590-\u05FF]/.test(text)) return "he";
+  if (/[\u0600-\u06FF]/.test(text)) return "ar";
+  if (/[A-Za-z]/.test(text)) return "en";
+  return fromApp ?? "he";
+}
+
 export interface AiContext {
   step: AiStep;
   mood?: string;
@@ -297,9 +312,10 @@ export function applyQuickModeDefaults(
     return {
       ...ctx,
       mood: "romantic",
+      // Prefer romantic spots; no budget lock — production seed is mostly FREE.
       category: "ROMANTIC_DATE",
-      budget: "MODERATE",
-      radiusKm: 10,
+      budget: undefined,
+      radiusKm: 50,
       partySize: 2,
       step: "done",
     };
@@ -309,10 +325,46 @@ export function applyQuickModeDefaults(
     mood: "fun",
     category: undefined,
     budget: undefined,
-    radiusKm: 15,
+    radiusKm: 50,
     partySize: 2,
     step: "done",
   };
+}
+
+/**
+ * Progressive place lookup: try preferred filters, then relax until we find something.
+ * Prevents empty "no results" when budget/category don't match seed data.
+ */
+export async function findRecommendedPlaces(
+  findMany: (where: {
+    isActive: boolean;
+    category?: PlaceCategory;
+    priceRange?: PriceRange;
+  }) => Promise<Place[]>,
+  ctx: AiContext,
+  language: AiLanguage
+): Promise<AiPlaceRecommendation[]> {
+  const attempts: Array<{ category?: PlaceCategory; budget?: PriceRange; radiusKm: number }> = [
+    { category: ctx.category, budget: ctx.budget, radiusKm: ctx.radiusKm ?? 50 },
+    { category: ctx.category, budget: undefined, radiusKm: ctx.radiusKm ?? 50 },
+    { category: undefined, budget: undefined, radiusKm: Math.max(ctx.radiusKm ?? 50, 50) },
+  ];
+
+  for (const attempt of attempts) {
+    const where: {
+      isActive: boolean;
+      category?: PlaceCategory;
+      priceRange?: PriceRange;
+    } = { isActive: true };
+    if (attempt.category) where.category = attempt.category;
+    if (attempt.budget) where.priceRange = attempt.budget;
+
+    const places = await findMany(where);
+    const ranked = rankPlaces(places, { ...ctx, radiusKm: attempt.radiusKm }, language);
+    if (ranked.length > 0) return ranked;
+  }
+
+  return [];
 }
 
 export function formatQuickModeIntro(mode: AiQuickMode, lang: AiLanguage): string {
