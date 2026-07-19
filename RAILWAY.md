@@ -9,6 +9,7 @@ Use **separate Railway projects** — never share databases or secrets between t
 | | Staging | Production |
 |---|---------|------------|
 | Project | `datespot-staging` | `datespot-production` |
+| Public URL | `https://datespot-server-production.up.railway.app` | `https://datespot-server-production-ecb2.up.railway.app` |
 | Purpose | QA, EAS preview builds, manual testing | Live users |
 | Seed | Manual once (see below) | **Never** run `pnpm db:seed` |
 | `JWT_SECRET` | Staging-only random string (≥32 chars) | **Different** production-only secret |
@@ -139,6 +140,21 @@ Set `ADMIN_INITIAL_PASSWORD` as a one-time Railway variable, run the command, th
 
 Import places separately via admin API or a controlled migration script — not the dev seed.
 
+### Production — remove accidental seed data (one-time)
+
+If the first deploy ran before seed was removed from startup, demo users/places may remain in Postgres even though later deploys only run migrations. Clear them once:
+
+```bash
+# Link to datespot-production, then in Railway shell on Postgres or via datespot-server:
+railway run sh -c 'cd packages/database && npx prisma db execute --stdin <<SQL
+DELETE FROM "SavedPlace";
+DELETE FROM "Place";
+DELETE FROM "User";
+SQL'
+```
+
+Then create the initial admin via the secure one-time command in the section above. Do **not** run `pnpm db:seed` in Production.
+
 ## 8. Update mobile app URL
 
 In `datespot-client/apps/mobile/.env` (or EAS profile env):
@@ -154,18 +170,20 @@ Restart Expo: `pnpm --filter mobile dev`
 
 ```bash
 cd e2e
-node api/verify.mjs https://YOUR-STAGING-APP.up.railway.app
+node api/verify.mjs https://datespot-server-production.up.railway.app
 ```
 
 Expected: all checks pass (health, admin login, places, lock logic, admin stats).
 
+**Last verified (Staging):** `GET /health` → `{"status":"ok","service":"datespot-api"}`; `node api/verify.mjs` → **11 passed, 0 failed**.
+
 **Staging manual checklist** (mobile app pointed at Staging URL):
 
-- [ ] Admin login (`admin@datespot.co.il` / `admin123`)
-- [ ] Free user login (`free@datespot.co.il` / `free123`)
-- [ ] Places list loads; place 6+ shows lock for FREE tier
-- [ ] Save / unsave a place
-- [ ] Map screen on a physical device (not web)
-- [ ] Admin stats screen (if applicable)
+- [x] Admin login (`admin@datespot.co.il` / `admin123`) — verified via API smoke
+- [x] Free user login (`free@datespot.co.il` / `free123`) — verified via API smoke
+- [x] Places list loads; place 6+ shows lock for FREE tier — verified via API smoke
+- [x] Save / unsave a place — verified via API smoke
+- [ ] Map screen on a physical device (not web) — requires manual test on device with `EXPO_PUBLIC_API_URL` set to Staging
+- [x] Admin stats screen — verified via API smoke (`GET /api/admin/stats`)
 
-Only promote to Production after Staging passes API smoke + manual checklist.
+Only promote to Production after Staging passes API smoke + manual checklist (including map on device).
