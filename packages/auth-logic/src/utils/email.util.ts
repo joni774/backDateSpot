@@ -7,9 +7,9 @@ export function createEmailSender(config: EmailConfig) {
   async function sendPasswordEmail(email: string, password: string): Promise<void> {
     await sendEmail(
       email,
-      "Your DateSpot password",
-      `Welcome to DateSpot!\n\nYour temporary password is: ${password}\n\nPlease change it after your first login.`,
-      `<p>Welcome to DateSpot!</p><p>Your temporary password is: <strong>${password}</strong></p><p>Please change it after your first login.</p>`
+      "ברוכים הבאים ל-DateSpot — הסיסמה שלך",
+      `שלום!\n\nנרשמת בהצלחה ל-DateSpot.\nהסיסמה הזמנית שלך: ${password}\n\nהתחבר/י עם האימייל והסיסמה, ומומלץ לשנות את הסיסמה אחרי הכניסה הראשונה.`,
+      `<p>שלום!</p><p>נרשמת בהצלחה ל-DateSpot.</p><p>הסיסמה הזמנית שלך: <strong>${password}</strong></p><p>התחבר/י עם האימייל והסיסמה, ומומלץ לשנות את הסיסמה אחרי הכניסה הראשונה.</p>`
     );
   }
 

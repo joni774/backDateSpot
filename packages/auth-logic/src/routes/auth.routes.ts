@@ -2,7 +2,7 @@ import { Router, type RequestHandler } from "express";
 import { z } from "zod";
 import crypto from "crypto";
 import { prisma, SubscriptionTier } from "@datespot/database";
-import { hashPassword, comparePassword } from "../utils/password.util";
+import { hashPassword, comparePassword, generateTemporaryPassword } from "../utils/password.util";
 import { createJwtUtils } from "../utils/jwt.util";
 import {
   issueTokenPair,
@@ -21,7 +21,7 @@ const registerSchema = z
     age: z.number().int().min(18).max(120).default(18),
     phone: z.string().min(9),
     email: z.string().email(),
-    password: z.string().min(8),
+    password: z.string().min(8).optional(),
   })
   .superRefine((data, ctx) => {
     const hasSplit = Boolean(data.firstName?.trim() && data.lastName?.trim());
@@ -124,7 +124,7 @@ function generateOtpCode(): string {
 export function createAuthRouter(config: AuthRouterConfig): Router {
   const router = Router();
   const jwtUtils = createJwtUtils(config.jwtSecret);
-  const { sendPasswordResetEmail } = createEmailSender({
+  const { sendPasswordResetEmail, sendPasswordEmail } = createEmailSender({
     sendgridApiKey: config.sendgridApiKey,
     sendgridFromEmail: config.sendgridFromEmail,
   });
@@ -162,7 +162,8 @@ export function createAuthRouter(config: AuthRouterConfig): Router {
         return;
       }
 
-      const passwordHash = await hashPassword(body.password);
+      const plainPassword = body.password ?? generateTemporaryPassword();
+      const passwordHash = await hashPassword(plainPassword);
       await prisma.user.create({
         data: {
           fullName,
@@ -172,7 +173,24 @@ export function createAuthRouter(config: AuthRouterConfig): Router {
           passwordHash,
         },
       });
-      res.status(201).json({ message: "Registration successful" });
+
+      try {
+        await sendPasswordEmail(body.email, plainPassword);
+      } catch (emailErr) {
+        console.error("Registration email failed:", emailErr);
+        await prisma.user.delete({ where: { email: body.email } }).catch(() => undefined);
+        res.status(500).json({ error: "Could not send registration email" });
+        return;
+      }
+
+      const response: { message: string; devPassword?: string } = {
+        message: "Registration successful. Check your email for your password.",
+      };
+      if (!config.sendgridApiKey) {
+        response.devPassword = plainPassword;
+      }
+
+      res.status(201).json(response);
     } catch (err) {
       if (err instanceof z.ZodError) {
         res.status(400).json({ error: err.flatten() });
