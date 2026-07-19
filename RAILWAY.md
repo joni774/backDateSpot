@@ -9,7 +9,7 @@ Use **separate Railway projects** — never share databases or secrets between t
 | | Staging | Production |
 |---|---------|------------|
 | Project | `datespot-staging` | `datespot-production` |
-| Public URL | `https://datespot-server-production.up.railway.app` | `https://datespot-server-production-ecb2.up.railway.app` |
+| Public URL | `https://datespot-staging.up.railway.app` | `https://datespot-server-production-ecb2.up.railway.app` |
 | Purpose | QA, EAS preview builds, manual testing | Live users |
 | Seed | Manual once (see below) | **Never** run `pnpm db:seed` |
 | `JWT_SECRET` | Staging-only random string (≥32 chars) | **Different** production-only secret |
@@ -170,7 +170,7 @@ Restart Expo: `pnpm --filter mobile dev`
 
 ```bash
 cd e2e
-node api/verify.mjs https://datespot-server-production.up.railway.app
+node api/verify.mjs https://datespot-staging.up.railway.app
 ```
 
 Expected: all checks pass (health, admin login, places, lock logic, admin stats).
