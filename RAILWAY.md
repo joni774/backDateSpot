@@ -2,6 +2,20 @@
 
 Use this after pushing `datespot-server` to GitHub.
 
+## Staging vs Production
+
+Use **separate Railway projects** — never share databases or secrets between them.
+
+| | Staging | Production |
+|---|---------|------------|
+| Project | `datespot-staging` | `datespot-production` |
+| Purpose | QA, EAS preview builds, manual testing | Live users |
+| Seed | Manual once (see below) | **Never** run `pnpm db:seed` |
+| `JWT_SECRET` | Staging-only random string (≥32 chars) | **Different** production-only secret |
+| Test users | `admin@datespot.co.il` / `admin123`, `free@datespot.co.il` / `free123` (from seed) | Create admin via secure one-time setup only |
+
+**Startup behavior:** The Docker image runs `prisma migrate deploy` on every container start. It does **not** run seed automatically — seed contains fixed demo passwords and must not run in Production.
+
 ## 1. Login to Railway
 
 ```bash
@@ -17,6 +31,8 @@ railway link
 ```
 
 Or connect via [Railway Dashboard](https://railway.app) → New Project → Deploy from GitHub.
+
+For Production, create a **new** project (`datespot-production`) — do not add a Production environment inside Staging.
 
 ## 3. Add PostgreSQL
 
@@ -42,9 +58,10 @@ Reference it on the API service as `${{Redis.REDIS_URL}}` if using Railway varia
 |----------|---------|
 | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` (reference from plugin) |
 | `REDIS_URL` | `${{Redis.REDIS_URL}}` (reference from Redis service) |
-| `JWT_SECRET` | Random 32+ character string |
+| `JWT_SECRET` | Random 32+ character string (**unique per project**) |
 | `NODE_ENV` | `production` |
 | `CORS_ORIGIN` | `*` (default) or your Expo Web origin if testing in browser |
+| `PUBLIC_API_URL` | `https://YOUR-APP.up.railway.app` (recommended) |
 
 ### Optional until implemented (documented in `apps/api/.env.example`)
 
@@ -62,22 +79,69 @@ These are part of PRD section 9 but not required for MVP API startup:
 
 ## 6. Deploy
 
-Railway auto-deploys on push to `main`. Build uses `railway.json` + `apps/api/Dockerfile`.
+Railway auto-deploys on push to `main`. Build uses `railway.json` + root `Dockerfile`.
 
 Verify: `curl https://YOUR-APP.up.railway.app/health`
 
-## 7. Run migrations (one-time)
+Migrations run automatically on container startup (`prisma migrate deploy`).
+
+## 7. Database setup
+
+### Staging only — seed demo data (one-time)
+
+After the first successful deploy to **Staging**, seed test users and sample places:
 
 ```bash
-railway run pnpm db:migrate
+# Link to datespot-staging, then:
 railway run pnpm db:seed
 ```
 
-Or use Railway shell with the same commands.
+Or use Railway shell with the same command.
+
+This creates `admin@datespot.co.il` / `admin123` and `free@datespot.co.il` / `free123` plus 13 Tel Aviv places. Safe for Staging only.
+
+Re-run seed only if you need to reset Staging data (it upserts users/places).
+
+### Production — migrations only, no seed
+
+Production containers apply migrations on startup. **Do not** run `pnpm db:seed` in Production.
+
+Create the initial admin user securely:
+
+1. Generate a strong password and store it in a password manager.
+2. Use Railway shell once after first deploy:
+
+```bash
+railway run node -e "
+const bcrypt = require('bcrypt');
+const { PrismaClient } = require('@prisma/client');
+const prisma = new PrismaClient();
+(async () => {
+  const hash = await bcrypt.hash(process.env.ADMIN_INITIAL_PASSWORD, 12);
+  await prisma.user.upsert({
+    where: { email: 'admin@datespot.co.il' },
+    update: {},
+    create: {
+      email: 'admin@datespot.co.il',
+      passwordHash: hash,
+      name: 'Admin',
+      role: 'ADMIN',
+      tier: 'PREMIUM',
+    },
+  });
+  console.log('Admin user ready');
+  await prisma.\$disconnect();
+})();
+"
+```
+
+Set `ADMIN_INITIAL_PASSWORD` as a one-time Railway variable, run the command, then **delete** that variable.
+
+Import places separately via admin API or a controlled migration script — not the dev seed.
 
 ## 8. Update mobile app URL
 
-In `datespot-client/apps/mobile/.env`:
+In `datespot-client/apps/mobile/.env` (or EAS profile env):
 
 ```env
 EXPO_PUBLIC_API_URL=https://YOUR-APP.up.railway.app
@@ -89,8 +153,19 @@ Restart Expo: `pnpm --filter mobile dev`
 ## 9. E2E against Railway
 
 ```bash
-cd datespot-server
-API_URL=https://YOUR-APP.up.railway.app pnpm e2e
+cd e2e
+node api/verify.mjs https://YOUR-STAGING-APP.up.railway.app
 ```
 
 Expected: all checks pass (health, admin login, places, lock logic, admin stats).
+
+**Staging manual checklist** (mobile app pointed at Staging URL):
+
+- [ ] Admin login (`admin@datespot.co.il` / `admin123`)
+- [ ] Free user login (`free@datespot.co.il` / `free123`)
+- [ ] Places list loads; place 6+ shows lock for FREE tier
+- [ ] Save / unsave a place
+- [ ] Map screen on a physical device (not web)
+- [ ] Admin stats screen (if applicable)
+
+Only promote to Production after Staging passes API smoke + manual checklist.

@@ -1,5 +1,5 @@
 /** AI date planner — conversational recommendations from places DB. */
-import { prisma, type PlaceCategory, type PriceRange } from "@datespot/database";
+import { prisma } from "@datespot/database";
 import { Router } from "express";
 import { z } from "zod";
 
