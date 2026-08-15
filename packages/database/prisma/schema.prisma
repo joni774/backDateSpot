@@ -124,6 +124,8 @@ model Place {
   sponsoredUntil DateTime?
   /// Higher priority wins among concurrently sponsored places.
   sponsoredPriority Int        @default(0)
+  /// Google Places id when the row was ingested from Nearby Search.
+  googlePlaceId  String?       @unique
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
   savedBy        SavedPlace[]

@@ -14,6 +14,7 @@ import {
   noopPlacesListCache,
   type PlacesListCache,
 } from "../cache";
+import { ingestGoogleNearbyPlaces } from "../google-nearby";
 import {
   buildGooglePhotoFetchUrl,
   resolvePlaceImageUrls,
@@ -25,7 +26,10 @@ const listQuerySchema = z.object({
   category: placeCategorySchema.optional(),
   lat: z.coerce.number().optional(),
   lng: z.coerce.number().optional(),
-  radius: z.coerce.number().default(10),
+  radius: z.coerce
+    .number()
+    .default(10)
+    .transform((n) => Math.min(50, Math.max(1, Number.isFinite(n) ? n : 10))),
   language: z.enum(["he", "en", "ar"]).default("he"),
   q: z.string().min(1).optional(),
 });
@@ -64,7 +68,13 @@ function getRequestBaseUrl(req: Request, publicApiUrl?: string): string {
 }
 
 function isSponsoredActive(place: Place, now = new Date()): boolean {
-  return place.sponsoredUntil != null && place.sponsoredUntil.getTime() > now.getTime();
+  if (place.sponsoredUntil == null) return false;
+  const until =
+    place.sponsoredUntil instanceof Date
+      ? place.sponsoredUntil
+      : new Date(place.sponsoredUntil as unknown as string);
+  if (Number.isNaN(until.getTime())) return false;
+  return until.getTime() > now.getTime();
 }
 
 function compareSponsoredThen(
@@ -138,6 +148,26 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
       if (cached) rawPlaces = JSON.parse(cached) as Place[];
 
       if (!rawPlaces) {
+        if (
+          query.lat != null &&
+          query.lng != null &&
+          config.googlePlacesApiKey
+        ) {
+          try {
+            await ingestGoogleNearbyPlaces({
+              apiKey: config.googlePlacesApiKey,
+              lat: query.lat,
+              lng: query.lng,
+              radiusKm: query.radius,
+              language: query.language,
+              category: query.category,
+              cache,
+            });
+          } catch (err) {
+            console.warn("[places] Google Nearby ingest skipped:", err);
+          }
+        }
+
         const where: {
           isActive: boolean;
           category?: PlaceCategory;
