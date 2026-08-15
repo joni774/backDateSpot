@@ -33,6 +33,13 @@ enum PriceRange {
   EXPENSIVE
 }
 
+// Lead type for business commission tracking (call / WhatsApp / website).
+enum LeadType {
+  CALL
+  WHATSAPP
+  WEBSITE
+}
+
 // App users: registration, login, subscription tier, admin flag.
 model User {
   id               String           @id @default(uuid())
@@ -63,6 +70,7 @@ model User {
   reviews          Review[]
   favorites        Favorite[]
   payments         Payment[]
+  placeLeads       PlaceLead[]
   sentInterests     NearbyInterest[] @relation("SentInterests")
   receivedInterests NearbyInterest[] @relation("ReceivedInterests")
   blocksMade        NearbyBlock[]    @relation("BlocksMade")
@@ -110,11 +118,37 @@ model Place {
   isActive       Boolean       @default(true)
   displayOrder   Int           @default(0)
   viewCount      Int           @default(0)
+  /// Flat fee billed to the business per recorded lead (agorot). 0 = no commission.
+  leadFeeAgorot  Int           @default(0)
+  /// When set and in the future, place is boosted in lists and marked as sponsored.
+  sponsoredUntil DateTime?
+  /// Higher priority wins among concurrently sponsored places.
+  sponsoredPriority Int        @default(0)
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
   savedBy        SavedPlace[]
   reviews        Review[]
   favorites      Favorite[]
+  leads          PlaceLead[]
+
+  @@index([sponsoredUntil])
+}
+
+// User contact intent toward a business (commissionable lead). Billing is offline/admin for MVP.
+model PlaceLead {
+  id         String   @id @default(uuid())
+  placeId    String
+  userId     String
+  type       LeadType
+  /// Snapshot of place.leadFeeAgorot at record time.
+  feeAgorot  Int      @default(0)
+  createdAt  DateTime @default(now())
+  place      Place    @relation(fields: [placeId], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([placeId, createdAt])
+  @@index([userId])
+  @@index([createdAt])
 }
 
 // User bookmarked places (heart / saved list).

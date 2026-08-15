@@ -4,6 +4,7 @@ import {
   prisma,
   PlaceCategory,
   SubscriptionTier,
+  LeadType,
   type Place,
 } from "@datespot/database";
 import { getDistanceKm } from "@datespot/utils";
@@ -38,6 +39,10 @@ const reviewSchema = z.object({
   text: z.string().max(1000).optional(),
 });
 
+const leadSchema = z.object({
+  type: z.nativeEnum(LeadType),
+});
+
 /** Bounding-box padding in degrees (~1 deg ≈ 111 km). */
 function radiusToBoundingBox(lat: number, lng: number, radiusKm: number) {
   const latDelta = radiusKm / 111;
@@ -58,6 +63,25 @@ function getRequestBaseUrl(req: Request, publicApiUrl?: string): string {
   return `${proto}://${host}`;
 }
 
+function isSponsoredActive(place: Place, now = new Date()): boolean {
+  return place.sponsoredUntil != null && place.sponsoredUntil.getTime() > now.getTime();
+}
+
+function compareSponsoredThen(
+  a: { place: Place; distance: number | null },
+  b: { place: Place; distance: number | null },
+  secondary: (a: { place: Place; distance: number | null }, b: { place: Place; distance: number | null }) => number
+): number {
+  const aSponsored = isSponsoredActive(a.place) ? 1 : 0;
+  const bSponsored = isSponsoredActive(b.place) ? 1 : 0;
+  if (aSponsored !== bSponsored) return bSponsored - aSponsored;
+  if (aSponsored && bSponsored) {
+    const priorityDiff = b.place.sponsoredPriority - a.place.sponsoredPriority;
+    if (priorityDiff !== 0) return priorityDiff;
+  }
+  return secondary(a, b);
+}
+
 function mapPlaceListItem(
   place: Place,
   language: "he" | "en" | "ar",
@@ -76,6 +100,7 @@ function mapPlaceListItem(
     images: baseUrl ? resolvePlaceImageUrls(place.images, baseUrl) : place.images,
     openingHours: place.openingHours as Record<string, string>,
     isLocked,
+    isSponsored: isSponsoredActive(place),
     latitude: place.latitude,
     longitude: place.longitude,
   };
@@ -164,9 +189,17 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
         filtered = withDistance.filter(
           (p) => p.distance === null || p.distance <= query.radius
         );
-        filtered.sort((a, b) => (a.distance ?? 0) - (b.distance ?? 0));
+        filtered.sort((a, b) =>
+          compareSponsoredThen(a, b, (x, y) => (x.distance ?? 0) - (y.distance ?? 0))
+        );
       } else {
-        filtered.sort((a, b) => a.place.displayOrder - b.place.displayOrder);
+        filtered.sort((a, b) =>
+          compareSponsoredThen(
+            a,
+            b,
+            (x, y) => x.place.displayOrder - y.place.displayOrder
+          )
+        );
       }
 
       const results = filtered.map(({ place, distance }, index) => {
@@ -430,6 +463,56 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
   });
 
   /**
+   * POST /:id/leads — record a commissionable contact intent (call / WhatsApp / website).
+   * Fee is snapshotted from place.leadFeeAgorot; billing is offline for MVP.
+   */
+  router.post("/:id/leads", config.verifyTokenMiddleware, async (req, res) => {
+    try {
+      const id = z.string().uuid().parse(req.params.id);
+      const body = leadSchema.parse(req.body);
+      const place = await prisma.place.findUnique({ where: { id } });
+      if (!place || !place.isActive) {
+        res.status(404).json({ error: "Place not found" });
+        return;
+      }
+
+      if (body.type === LeadType.CALL || body.type === LeadType.WHATSAPP) {
+        if (!place.phone) {
+          res.status(400).json({ error: "Place has no phone number" });
+          return;
+        }
+      }
+      if (body.type === LeadType.WEBSITE && !place.website) {
+        res.status(400).json({ error: "Place has no website" });
+        return;
+      }
+
+      const lead = await prisma.placeLead.create({
+        data: {
+          placeId: id,
+          userId: req.user!.userId,
+          type: body.type,
+          feeAgorot: place.leadFeeAgorot,
+        },
+      });
+
+      res.status(201).json({
+        id: lead.id,
+        type: lead.type,
+        feeAgorot: lead.feeAgorot,
+        createdAt: lead.createdAt.toISOString(),
+      });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        res.status(400).json({ error: err.flatten() });
+        return;
+      }
+      console.error(err);
+      res.status(500).json({ error: "Failed to record lead" });
+    }
+  });
+
+  /**
    * GET /:id — full place details.
    * Freemium gate: FREE users cannot access places beyond index 5; VIP unlocks all.
    */
@@ -503,6 +586,7 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
         deliveryTenBisUrl: place.deliveryTenBisUrl,
         deliveryMishlohaUrl: place.deliveryMishlohaUrl,
         isOpen: isPlaceOpenNow(place.openingHours),
+        isSponsored: isSponsoredActive(place),
         isSaved,
         isFavorite,
         viewCount: place.viewCount + 1,

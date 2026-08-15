@@ -5,6 +5,7 @@ import {
   PlaceCategory,
   SubscriptionTier,
   PriceRange,
+  LeadType,
 } from "@datespot/database";
 import { placeCategorySchema } from "@datespot/places-logic";
 import { noopAdminCacheHooks, type AdminCacheHooks } from "../cache";
@@ -17,6 +18,18 @@ const optionalUrl = z
     return v.trim();
   })
   .refine((v) => v == null || /^https?:\/\//i.test(v), { message: "Invalid URL" });
+
+const optionalDateTime = z
+  .union([z.string().datetime(), z.string().regex(/^\d{4}-\d{2}-\d{2}$/), z.null()])
+  .optional()
+  .transform((v) => {
+    if (v === undefined) return undefined;
+    if (v === null || v === "") return null;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+      return new Date(`${v}T23:59:59.000Z`);
+    }
+    return new Date(v);
+  });
 
 const placeBodySchema = z.object({
   nameHe: z.string().min(1),
@@ -39,6 +52,9 @@ const placeBodySchema = z.object({
   deliveryMishlohaUrl: optionalUrl,
   isActive: z.boolean().optional(),
   displayOrder: z.number().int().optional(),
+  leadFeeAgorot: z.number().int().min(0).optional(),
+  sponsoredUntil: optionalDateTime,
+  sponsoredPriority: z.number().int().optional(),
 });
 
 const placeUpdateSchema = placeBodySchema.partial();
@@ -61,7 +77,7 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
       const weekAgo = new Date();
       weekAgo.setDate(weekAgo.getDate() - 7);
 
-      const [totalUsers, weeklyActiveUsers, premiumUsers, vipUsers, totalPlaces] =
+      const [totalUsers, weeklyActiveUsers, premiumUsers, vipUsers, totalPlaces, totalLeads, weeklyLeads, leadFeeSum] =
         await Promise.all([
           prisma.user.count(),
           prisma.user.count({ where: { lastLoginAt: { gte: weekAgo } } }),
@@ -70,6 +86,9 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
           }),
           prisma.user.count({ where: { subscriptionTier: SubscriptionTier.VIP } }),
           prisma.place.count({ where: { isActive: true } }),
+          prisma.placeLead.count(),
+          prisma.placeLead.count({ where: { createdAt: { gte: weekAgo } } }),
+          prisma.placeLead.aggregate({ _sum: { feeAgorot: true } }),
         ]);
 
       const categoryCounts = await Promise.all(
@@ -92,6 +111,9 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
         vipUsers,
         totalPlaces,
         placesByCategory,
+        totalLeads,
+        weeklyLeads,
+        leadRevenueAgorot: leadFeeSum._sum.feeAgorot ?? 0,
       });
     } catch (err) {
       console.error(err);
@@ -286,6 +308,73 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
       }
       console.error(err);
       res.status(500).json({ error: "Failed to update subscription" });
+    }
+  });
+
+  router.get("/leads", async (req, res) => {
+    try {
+      const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10));
+      const limit = Math.min(
+        100,
+        Math.max(1, parseInt(String(req.query.limit ?? "30"), 10))
+      );
+      const skip = (page - 1) * limit;
+      const placeId =
+        typeof req.query.placeId === "string" && req.query.placeId
+          ? z.string().uuid().parse(req.query.placeId)
+          : undefined;
+      const type =
+        typeof req.query.type === "string" && req.query.type
+          ? z.nativeEnum(LeadType).parse(req.query.type)
+          : undefined;
+
+      const where = {
+        ...(placeId && { placeId }),
+        ...(type && { type }),
+      };
+
+      const [leads, total] = await Promise.all([
+        prisma.placeLead.findMany({
+          where,
+          skip,
+          take: limit,
+          orderBy: { createdAt: "desc" },
+          include: {
+            place: { select: { id: true, nameHe: true, nameEn: true } },
+            user: { select: { id: true, fullName: true, email: true } },
+          },
+        }),
+        prisma.placeLead.count({ where }),
+      ]);
+
+      res.json({
+        leads: leads.map((lead) => ({
+          id: lead.id,
+          type: lead.type,
+          feeAgorot: lead.feeAgorot,
+          createdAt: lead.createdAt.toISOString(),
+          place: {
+            id: lead.place.id,
+            nameHe: lead.place.nameHe,
+            nameEn: lead.place.nameEn,
+          },
+          user: {
+            id: lead.user.id,
+            fullName: lead.user.fullName,
+            email: lead.user.email,
+          },
+        })),
+        total,
+        page,
+        totalPages: Math.ceil(total / limit) || 1,
+      });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        res.status(400).json({ error: err.flatten() });
+        return;
+      }
+      console.error(err);
+      res.status(500).json({ error: "Failed to fetch leads" });
     }
   });
 

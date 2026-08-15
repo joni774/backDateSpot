@@ -13,6 +13,8 @@ export type PlaceCategory =
 
 export type PriceRange = "FREE" | "BUDGET" | "MODERATE" | "EXPENSIVE";
 
+export type LeadType = "CALL" | "WHATSAPP" | "WEBSITE";
+
 export type Language = "he" | "en" | "ar";
 
 export interface PlaceListItem {
@@ -25,6 +27,7 @@ export interface PlaceListItem {
   images: string[];
   openingHours: Record<string, string>;
   isLocked?: boolean;
+  isSponsored?: boolean;
 }
 
 export interface PlaceDetail extends PlaceListItem {
@@ -130,6 +133,7 @@ export interface AiPlaceRecommendation {
   priceRange: PriceRange;
   distanceKm: number | null;
   isOpen: boolean;
+  isSponsored?: boolean;
 }
 
 export interface AiRecommendations {

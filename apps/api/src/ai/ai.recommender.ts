@@ -420,13 +420,30 @@ export function rankPlaces(
     }))
     .filter(({ rec }) => rec.distanceKm == null || rec.distanceKm <= radius)
     .sort((a, b) => {
+      const aSponsored =
+        a.place.sponsoredUntil != null && a.place.sponsoredUntil.getTime() > Date.now()
+          ? 1
+          : 0;
+      const bSponsored =
+        b.place.sponsoredUntil != null && b.place.sponsoredUntil.getTime() > Date.now()
+          ? 1
+          : 0;
+      if (aSponsored !== bSponsored) return bSponsored - aSponsored;
+      if (aSponsored && bSponsored) {
+        const p = b.place.sponsoredPriority - a.place.sponsoredPriority;
+        if (p !== 0) return p;
+      }
       if (a.rec.isOpen !== b.rec.isOpen) return a.rec.isOpen ? -1 : 1;
       const da = a.rec.distanceKm ?? 999;
       const db = b.rec.distanceKm ?? 999;
       if (da !== db) return da - db;
       return a.place.displayOrder - b.place.displayOrder;
     })
-    .map(({ rec }) => rec);
+    .map(({ place, rec }) => ({
+      ...rec,
+      isSponsored:
+        place.sponsoredUntil != null && place.sponsoredUntil.getTime() > Date.now(),
+    }));
 }
 
 export function buildRecommendations(
