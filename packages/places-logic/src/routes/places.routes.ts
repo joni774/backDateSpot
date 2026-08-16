@@ -16,7 +16,7 @@ import {
 } from "../cache";
 import { ingestGoogleNearbyPlaces } from "../google-nearby";
 import { ingestOsmNearbyPlaces } from "../osm-nearby";
-import { prismaCategoryFilter } from "../category-filter";
+import { placeMatchesCategory, prismaCategoryFilter } from "../category-filter";
 import {
   buildGooglePhotoFetchUrl,
   resolvePlaceImageUrls,
@@ -198,6 +198,11 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
         }
 
         rawPlaces = await prisma.place.findMany({ where });
+        if (query.category) {
+          rawPlaces = rawPlaces.filter((place) =>
+            placeMatchesCategory(place, query.category)
+          );
+        }
 
         if (rawPlaces.length > 0) {
           await cache.set(cacheKey, JSON.stringify(rawPlaces), PLACES_LIST_TTL);

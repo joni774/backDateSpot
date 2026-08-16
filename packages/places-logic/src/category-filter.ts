@@ -8,12 +8,58 @@ export const RESTAURANT_CATEGORIES: PlaceCategory[] = [
   PlaceCategory.SUSHI,
 ];
 
+const MEAT_RE =
+  /בשר|סטייק|steak|grill|גריל|שווארמה|shawarma|המבורגר|hamburger|burger|בורגר|אסאדו|asado|bbq|ברביקיו|קבב|kebab|שניצל|schnitzel|מקדונלד|mcdonald|wolfnights|בורגוס|אסאדו/i;
+
+const SUSHI_RE =
+  /סושי|sushi|sashimi|סשימי|סאשימי|יפני|japanese|tokyo|oshi|ניגירי|nigiri|ramen|ראמן/i;
+
 export function prismaCategoryFilter(
   category?: string
 ): PlaceCategory | { in: PlaceCategory[] } | undefined {
   if (!category) return undefined;
-  if (category === "RESTAURANT") {
+  if (category === "RESTAURANT" || category === "MEAT_RESTAURANT" || category === "SUSHI") {
     return { in: RESTAURANT_CATEGORIES };
   }
+  if (category === "ATTRACTION") {
+    return { in: [PlaceCategory.ATTRACTION, PlaceCategory.SUNSET] };
+  }
   return category as PlaceCategory;
+}
+
+export function classifyFoodName(name: string): PlaceCategory | undefined {
+  if (SUSHI_RE.test(name)) return PlaceCategory.SUSHI;
+  if (MEAT_RE.test(name)) return PlaceCategory.MEAT_RESTAURANT;
+  return undefined;
+}
+
+export function placeMatchesCategory(
+  place: {
+    category: PlaceCategory;
+    nameHe: string;
+    nameEn: string;
+    nameAr: string;
+  },
+  category?: string
+): boolean {
+  if (!category) return true;
+  const names = `${place.nameHe} ${place.nameEn} ${place.nameAr}`;
+  if (category === "RESTAURANT") {
+    return RESTAURANT_CATEGORIES.includes(place.category);
+  }
+  if (category === "MEAT_RESTAURANT") {
+    return (
+      place.category === PlaceCategory.MEAT_RESTAURANT || MEAT_RE.test(names)
+    );
+  }
+  if (category === "SUSHI") {
+    return place.category === PlaceCategory.SUSHI || SUSHI_RE.test(names);
+  }
+  if (category === "ATTRACTION") {
+    return (
+      place.category === PlaceCategory.ATTRACTION ||
+      place.category === PlaceCategory.SUNSET
+    );
+  }
+  return place.category === category;
 }

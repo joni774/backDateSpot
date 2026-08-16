@@ -5,16 +5,18 @@ import {
 } from "@datespot/database";
 import { getDistanceKm } from "@datespot/utils";
 import type { PlacesListCache } from "./cache";
+import { classifyFoodName } from "./category-filter";
 import { fallbackUniqueImage } from "./place-image-sources";
 
-const PHOTON_URL = "https://photon.komoot.io/reverse";
+const PHOTON_REVERSE_URL = "https://photon.komoot.io/reverse";
+const PHOTON_SEARCH_URL = "https://photon.komoot.io/api/";
 const OVERPASS_URLS = [
   "https://overpass.kumi.systems/api/interpreter",
   "https://overpass-api.de/api/interpreter",
   "https://overpass.osm.jp/api/interpreter",
 ];
 const INGEST_TTL_SECONDS = 15 * 60;
-const MAX_PLACES = 80;
+const MAX_PLACES = 200;
 const FETCH_TIMEOUT_MS = 8000;
 const localIngestAt = new Map<string, number>();
 
@@ -76,19 +78,9 @@ async function fetchWithTimeout(
 }
 
 function mapAmenityCategory(value: string, name: string): PlaceCategory {
+  const fromName = classifyFoodName(name);
+  if (fromName) return fromName;
   const v = value.toLowerCase();
-  const n = name.toLowerCase();
-  if (v === "sushi" || n.includes("סושי") || n.includes("sushi")) {
-    return PlaceCategory.SUSHI;
-  }
-  if (
-    v.includes("steak") ||
-    n.includes("בשר") ||
-    n.includes("steak") ||
-    n.includes("grill")
-  ) {
-    return PlaceCategory.MEAT_RESTAURANT;
-  }
   if (v === "bar" || v === "pub" || v === "nightclub") {
     return PlaceCategory.ROMANTIC_DATE;
   }
@@ -156,7 +148,7 @@ async function fetchPhotonGroup(
     limit: "50",
   });
   for (const tag of tags) params.append("osm_tag", tag);
-  const res = await fetchWithTimeout(`${PHOTON_URL}?${params.toString()}`, {
+  const res = await fetchWithTimeout(`${PHOTON_REVERSE_URL}?${params.toString()}`, {
     headers: {
       Accept: "application/json",
       "User-Agent": "DateSpot/1.0 (nearby-places)",
@@ -165,6 +157,34 @@ async function fetchPhotonGroup(
   if (!res.ok) throw new Error(`Photon HTTP ${res.status}`);
   const data = (await res.json()) as { features?: PhotonFeature[] };
   return data.features ?? [];
+}
+
+async function fetchPhotonSearch(
+  lat: number,
+  lng: number,
+  radiusKm: number,
+  query: string,
+  forcedCategory?: PlaceCategory
+): Promise<NearbyHit[]> {
+  const params = new URLSearchParams({
+    q: query,
+    lat: String(lat),
+    lon: String(lng),
+    limit: "30",
+    location_bias_scale: "0.1",
+  });
+  const res = await fetchWithTimeout(`${PHOTON_SEARCH_URL}?${params.toString()}`, {
+    headers: {
+      Accept: "application/json",
+      "User-Agent": "DateSpot/1.0 (nearby-places)",
+    },
+  });
+  if (!res.ok) throw new Error(`Photon search HTTP ${res.status}`);
+  const data = (await res.json()) as { features?: PhotonFeature[] };
+  return mapPhotonHits(data.features ?? [], lat, lng, radiusKm).map((hit) => ({
+    ...hit,
+    category: forcedCategory ?? hit.category,
+  }));
 }
 
 async function fetchPhotonNearby(
@@ -177,21 +197,43 @@ async function fetchPhotonNearby(
     ["amenity:bar", "amenity:pub", "amenity:nightclub"],
     ["tourism:attraction", "tourism:museum", "tourism:viewpoint"],
   ];
-  const batches = await Promise.allSettled(
-    groups.map((tags) => fetchPhotonGroup(lat, lng, radiusKm, tags))
-  );
+  const searches: Array<{ q: string; category: PlaceCategory }> = [
+    { q: "סושי", category: PlaceCategory.SUSHI },
+    { q: "sushi", category: PlaceCategory.SUSHI },
+    { q: "סטייק", category: PlaceCategory.MEAT_RESTAURANT },
+    { q: "שווארמה", category: PlaceCategory.MEAT_RESTAURANT },
+    { q: "המבורגר", category: PlaceCategory.MEAT_RESTAURANT },
+    { q: "אטרקציה", category: PlaceCategory.ATTRACTION },
+  ];
+
+  const [groupBatches, searchBatches] = await Promise.all([
+    Promise.allSettled(groups.map((tags) => fetchPhotonGroup(lat, lng, radiusKm, tags))),
+    Promise.allSettled(
+      searches.map((item) => fetchPhotonSearch(lat, lng, radiusKm, item.q, item.category))
+    ),
+  ]);
+
   const hits: NearbyHit[] = [];
   const seen = new Set<string>();
-  for (const batch of batches) {
+  const add = (hit: NearbyHit) => {
+    if (seen.has(hit.externalId)) return;
+    seen.add(hit.externalId);
+    hits.push(hit);
+  };
+
+  for (const batch of groupBatches) {
     if (batch.status !== "fulfilled") {
       console.warn("[places] Photon group failed:", batch.reason);
       continue;
     }
-    for (const hit of mapPhotonHits(batch.value, lat, lng, radiusKm)) {
-      if (seen.has(hit.externalId)) continue;
-      seen.add(hit.externalId);
-      hits.push(hit);
+    for (const hit of mapPhotonHits(batch.value, lat, lng, radiusKm)) add(hit);
+  }
+  for (const batch of searchBatches) {
+    if (batch.status !== "fulfilled") {
+      console.warn("[places] Photon search failed:", batch.reason);
+      continue;
     }
+    for (const hit of batch.value) add(hit);
   }
   return hits;
 }
@@ -202,7 +244,9 @@ function mapOsmCategory(tags: Record<string, string>): PlaceCategory {
   const tourism = (tags.tourism || "").toLowerCase();
   const leisure = (tags.leisure || "").toLowerCase();
   const name = (tags.name || tags["name:he"] || "").toLowerCase();
-  if (cuisine.includes("sushi") || name.includes("סושי") || name.includes("sushi")) {
+  const fromName = classifyFoodName(name);
+  if (fromName) return fromName;
+  if (cuisine.includes("sushi") || cuisine.includes("japanese")) {
     return PlaceCategory.SUSHI;
   }
   if (
@@ -210,7 +254,8 @@ function mapOsmCategory(tags: Record<string, string>): PlaceCategory {
     cuisine.includes("grill") ||
     cuisine.includes("burger") ||
     cuisine.includes("meat") ||
-    name.includes("בשר")
+    cuisine.includes("kebab") ||
+    cuisine.includes("barbecue")
   ) {
     return PlaceCategory.MEAT_RESTAURANT;
   }
@@ -358,6 +403,7 @@ export async function ingestOsmNearbyPlaces(options: {
     gridCoord(lat),
     gridCoord(lng),
     Math.round(radiusKm),
+    "v2",
   ].join(":");
 
   const already = await cache.get(ingestKey);
