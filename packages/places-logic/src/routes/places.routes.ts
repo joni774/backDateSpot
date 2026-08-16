@@ -145,29 +145,43 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
       const cacheKey = `${PLACES_LIST_KEY}:${query.category ?? "all"}:${query.lat ?? ""}:${query.lng ?? ""}:${query.radius}`;
 
       let rawPlaces: Place[] | null = null;
+      let ingested = 0;
 
-      const cached = await cache.get(cacheKey);
-      if (cached) rawPlaces = JSON.parse(cached) as Place[];
-
-      if (!rawPlaces) {
-        if (query.lat != null && query.lng != null) {
-          if (config.googlePlacesApiKey) {
-            try {
-              await ingestGoogleNearbyPlaces({
-                apiKey: config.googlePlacesApiKey,
-                lat: query.lat,
-                lng: query.lng,
-                radiusKm: query.radius,
-                language: query.language,
-                category: query.category,
-                cache,
-              });
-            } catch (err) {
-              console.warn("[places] Google Nearby ingest skipped:", err);
-            }
+      if (query.lat != null && query.lng != null) {
+        if (config.googlePlacesApiKey) {
+          try {
+            await ingestGoogleNearbyPlaces({
+              apiKey: config.googlePlacesApiKey,
+              lat: query.lat,
+              lng: query.lng,
+              radiusKm: query.radius,
+              language: query.language,
+              category: query.category,
+              cache,
+            });
+          } catch (err) {
+            console.warn("[places] Google Nearby ingest skipped:", err);
           }
         }
+        try {
+          ingested = await ingestOsmNearbyPlaces({
+            lat: query.lat,
+            lng: query.lng,
+            radiusKm: query.radius,
+            language: query.language,
+            cache,
+          });
+        } catch (err) {
+          console.warn("[places] OSM Nearby ingest skipped:", err);
+        }
+      }
 
+      if (ingested === 0) {
+        const cached = await cache.get(cacheKey);
+        if (cached) rawPlaces = JSON.parse(cached) as Place[];
+      }
+
+      if (!rawPlaces) {
         const where: {
           isActive: boolean;
           category?: PlaceCategory | { in: PlaceCategory[] };
@@ -184,21 +198,6 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
         }
 
         rawPlaces = await prisma.place.findMany({ where });
-
-        if (query.lat != null && query.lng != null && rawPlaces.length < 8) {
-          try {
-            await ingestOsmNearbyPlaces({
-              lat: query.lat,
-              lng: query.lng,
-              radiusKm: query.radius,
-              language: query.language,
-              cache,
-            });
-            rawPlaces = await prisma.place.findMany({ where });
-          } catch (err) {
-            console.warn("[places] OSM Nearby ingest skipped:", err);
-          }
-        }
 
         if (rawPlaces.length > 0) {
           await cache.set(cacheKey, JSON.stringify(rawPlaces), PLACES_LIST_TTL);
