@@ -51,21 +51,42 @@ function specsForCategory(category?: string): SearchSpec[] {
     case "DAIRY_RESTAURANT":
       return [{ type: "cafe" }, { type: "bakery" }];
     case "RESTAURANT":
-      return [{ type: "restaurant" }];
+      return [
+        { type: "restaurant" },
+        { type: "cafe" },
+        { type: "meal_takeaway" },
+      ];
     case "ATTRACTION":
       return [{ type: "tourist_attraction" }, { type: "museum" }];
     case "SUNSET":
       return [{ type: "park" }, { keyword: "beach" }];
     case "ROMANTIC_DATE":
-      return [{ type: "bar" }, { type: "cafe" }, { type: "park" }];
+      return [
+        { type: "bar" },
+        { type: "night_club" },
+        { type: "cafe" },
+        { keyword: "pub" },
+      ];
     default:
       return [
         { type: "restaurant" },
-        { type: "tourist_attraction" },
+        { type: "cafe" },
         { type: "bar" },
         { type: "night_club" },
+        { type: "tourist_attraction" },
       ];
   }
+}
+
+function resolveCategory(types: string[], requested?: string): PlaceCategory {
+  if (
+    requested === "SUSHI" ||
+    requested === "MEAT_RESTAURANT" ||
+    requested === "DAIRY_RESTAURANT"
+  ) {
+    return requested as PlaceCategory;
+  }
+  return mapCategory(types);
 }
 
 function mapCategory(types: string[]): PlaceCategory {
@@ -146,7 +167,8 @@ async function fetchNearby(
 
 async function upsertGooglePlace(
   result: GoogleNearbyResult,
-  language: "he" | "en" | "ar"
+  language: "he" | "en" | "ar",
+  requestedCategory?: string
 ): Promise<void> {
   const googlePlaceId = result.place_id?.trim();
   const name = result.name?.trim();
@@ -171,7 +193,7 @@ async function upsertGooglePlace(
       descriptionHe: description,
       descriptionEn: description,
       descriptionAr: description,
-      category: mapCategory(types),
+      category: resolveCategory(types, requestedCategory),
       latitude: lat,
       longitude: lng,
       address,
@@ -247,6 +269,8 @@ export async function ingestGoogleNearbyPlaces(options: {
     }
   }
 
-  await Promise.allSettled(unique.slice(0, 80).map((result) => upsertGooglePlace(result, language)));
+  await Promise.allSettled(
+    unique.slice(0, 80).map((result) => upsertGooglePlace(result, language, category))
+  );
   await cache.set(ingestKey, "1", INGEST_TTL_SECONDS);
 }

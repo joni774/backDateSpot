@@ -123,7 +123,10 @@ function mapCategory(tags: Record<string, string>): PlaceCategory {
       ? PlaceCategory.ATTRACTION
       : PlaceCategory.ROMANTIC_DATE;
   }
-  if (amenity === "restaurant" || amenity === "bar" || amenity === "fast_food") {
+  if (amenity === "bar" || amenity === "pub" || amenity === "nightclub") {
+    return PlaceCategory.ROMANTIC_DATE;
+  }
+  if (amenity === "restaurant" || amenity === "fast_food") {
     return PlaceCategory.RESTAURANT;
   }
   return PlaceCategory.ATTRACTION;
