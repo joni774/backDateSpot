@@ -192,7 +192,6 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
               lng: query.lng,
               radiusKm: query.radius,
               language: query.language,
-              category: query.category,
               cache,
             });
             rawPlaces = await prisma.place.findMany({ where });

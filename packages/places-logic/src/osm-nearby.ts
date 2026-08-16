@@ -3,16 +3,46 @@ import {
   PlaceCategory,
   PriceRange,
 } from "@datespot/database";
+import { getDistanceKm } from "@datespot/utils";
 import type { PlacesListCache } from "./cache";
 import { fallbackUniqueImage } from "./place-image-sources";
 
+const PHOTON_URL = "https://photon.komoot.io/reverse";
 const OVERPASS_URLS = [
-  "https://overpass-api.de/api/interpreter",
   "https://overpass.kumi.systems/api/interpreter",
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.osm.jp/api/interpreter",
 ];
 const INGEST_TTL_SECONDS = 15 * 60;
 const MAX_PLACES = 80;
+const FETCH_TIMEOUT_MS = 8000;
 const localIngestAt = new Map<string, number>();
+
+type NearbyHit = {
+  externalId: string;
+  nameHe: string;
+  nameEn: string;
+  nameAr: string;
+  lat: number;
+  lng: number;
+  address: string;
+  category: PlaceCategory;
+};
+
+type PhotonFeature = {
+  geometry?: { coordinates?: [number, number] };
+  properties?: {
+    osm_id?: number;
+    osm_type?: string;
+    osm_key?: string;
+    osm_value?: string;
+    name?: string;
+    street?: string;
+    housenumber?: string;
+    city?: string;
+    country?: string;
+  };
+};
 
 type OsmElement = {
   type?: string;
@@ -31,53 +61,147 @@ function radiusMeters(radiusKm: number): number {
   return Math.min(50_000, Math.max(800, Math.round(radiusKm * 1000)));
 }
 
-function overpassFilters(category?: string): string[] {
-  switch (category) {
-    case "SUSHI":
-      return [
-        `["amenity"~"restaurant|fast_food"]["cuisine"~"sushi|japanese",i]`,
-        `["name"~"סושי|sushi",i]["amenity"~"restaurant|fast_food"]`,
-      ];
-    case "MEAT_RESTAURANT":
-      return [
-        `["amenity"="restaurant"]["cuisine"~"steak|grill|burger|meat|barbecue|kebab",i]`,
-        `["name"~"סטייק|בשר|grill|steak|burger",i]["amenity"="restaurant"]`,
-      ];
-    case "DAIRY_RESTAURANT":
-      return [
-        `["amenity"~"cafe|ice_cream"]`,
-        `["amenity"="restaurant"]["cuisine"~"pizza|dairy|vegetarian|coffee",i]`,
-      ];
-    case "RESTAURANT":
-      return [`["amenity"~"restaurant|cafe|fast_food|ice_cream"]`];
-    case "ROMANTIC_DATE":
-      return [
-        `["amenity"~"bar|pub|nightclub"]`,
-        `["leisure"~"park|garden"]`,
-      ];
-    case "SUNSET":
-      return [`["tourism"="viewpoint"]`, `["leisure"="beach"]`];
-    case "ATTRACTION":
-      return [`["tourism"~"attraction|museum"]`];
-    default:
-      return [
-        `["amenity"~"restaurant|cafe|bar|pub|nightclub|fast_food|ice_cream"]`,
-        `["tourism"~"attraction|museum|viewpoint"]`,
-      ];
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs = FETCH_TIMEOUT_MS
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
   }
 }
 
-function mapOsmCategory(tags: Record<string, string>, requested?: string): PlaceCategory {
-  if (requested === "SUSHI" || requested === "MEAT_RESTAURANT" || requested === "DAIRY_RESTAURANT") {
-    return requested as PlaceCategory;
+function mapAmenityCategory(value: string, name: string): PlaceCategory {
+  const v = value.toLowerCase();
+  const n = name.toLowerCase();
+  if (v === "sushi" || n.includes("סושי") || n.includes("sushi")) {
+    return PlaceCategory.SUSHI;
   }
+  if (
+    v.includes("steak") ||
+    n.includes("בשר") ||
+    n.includes("steak") ||
+    n.includes("grill")
+  ) {
+    return PlaceCategory.MEAT_RESTAURANT;
+  }
+  if (v === "bar" || v === "pub" || v === "nightclub") {
+    return PlaceCategory.ROMANTIC_DATE;
+  }
+  if (v === "cafe" || v === "ice_cream" || v === "bakery") {
+    return PlaceCategory.DAIRY_RESTAURANT;
+  }
+  if (v === "viewpoint" || v === "beach") return PlaceCategory.SUNSET;
+  if (v === "attraction" || v === "museum") return PlaceCategory.ATTRACTION;
+  if (v === "park" || v === "garden") return PlaceCategory.ROMANTIC_DATE;
+  if (v === "restaurant" || v === "fast_food") return PlaceCategory.RESTAURANT;
+  return PlaceCategory.RESTAURANT;
+}
 
+function fallbackDescription(name: string, language: "he" | "en" | "ar"): string {
+  if (language === "ar") return `${name} — مكان قريب للخروج.`;
+  if (language === "en") return `${name} — a nearby spot for a night out.`;
+  return `${name} — מקום בקרבתך ליציאה.`;
+}
+
+function mapPhotonHits(
+  features: PhotonFeature[],
+  originLat: number,
+  originLng: number,
+  radiusKm: number
+): NearbyHit[] {
+  const hits: NearbyHit[] = [];
+  for (const feature of features) {
+    const props = feature.properties;
+    const coords = feature.geometry?.coordinates;
+    if (!props?.osm_id || !coords || coords.length < 2) continue;
+    const name = props.name?.trim();
+    if (!name) continue;
+    const lng = coords[0];
+    const lat = coords[1];
+    if (getDistanceKm(originLat, originLng, lat, lng) > radiusKm) continue;
+    const osmType =
+      props.osm_type === "W" ? "way" : props.osm_type === "R" ? "relation" : "node";
+    const address = [props.street, props.housenumber, props.city]
+      .filter(Boolean)
+      .join(" ") || props.country || "ישראל";
+    hits.push({
+      externalId: `osm:${osmType}:${props.osm_id}`,
+      nameHe: name,
+      nameEn: name,
+      nameAr: name,
+      lat,
+      lng,
+      address,
+      category: mapAmenityCategory(props.osm_value ?? "", name),
+    });
+  }
+  return hits;
+}
+
+async function fetchPhotonGroup(
+  lat: number,
+  lng: number,
+  radiusKm: number,
+  tags: string[]
+): Promise<PhotonFeature[]> {
+  const params = new URLSearchParams({
+    lat: String(lat),
+    lon: String(lng),
+    radius: String(Math.min(50, Math.max(1, radiusKm))),
+    limit: "50",
+  });
+  for (const tag of tags) params.append("osm_tag", tag);
+  const res = await fetchWithTimeout(`${PHOTON_URL}?${params.toString()}`, {
+    headers: {
+      Accept: "application/json",
+      "User-Agent": "DateSpot/1.0 (nearby-places)",
+    },
+  });
+  if (!res.ok) throw new Error(`Photon HTTP ${res.status}`);
+  const data = (await res.json()) as { features?: PhotonFeature[] };
+  return data.features ?? [];
+}
+
+async function fetchPhotonNearby(
+  lat: number,
+  lng: number,
+  radiusKm: number
+): Promise<NearbyHit[]> {
+  const groups = [
+    ["amenity:restaurant", "amenity:cafe", "amenity:fast_food", "amenity:ice_cream"],
+    ["amenity:bar", "amenity:pub", "amenity:nightclub"],
+    ["tourism:attraction", "tourism:museum", "tourism:viewpoint"],
+  ];
+  const batches = await Promise.allSettled(
+    groups.map((tags) => fetchPhotonGroup(lat, lng, radiusKm, tags))
+  );
+  const hits: NearbyHit[] = [];
+  const seen = new Set<string>();
+  for (const batch of batches) {
+    if (batch.status !== "fulfilled") {
+      console.warn("[places] Photon group failed:", batch.reason);
+      continue;
+    }
+    for (const hit of mapPhotonHits(batch.value, lat, lng, radiusKm)) {
+      if (seen.has(hit.externalId)) continue;
+      seen.add(hit.externalId);
+      hits.push(hit);
+    }
+  }
+  return hits;
+}
+
+function mapOsmCategory(tags: Record<string, string>): PlaceCategory {
   const cuisine = (tags.cuisine || "").toLowerCase();
   const amenity = (tags.amenity || "").toLowerCase();
   const tourism = (tags.tourism || "").toLowerCase();
   const leisure = (tags.leisure || "").toLowerCase();
   const name = (tags.name || tags["name:he"] || "").toLowerCase();
-
   if (cuisine.includes("sushi") || name.includes("סושי") || name.includes("sushi")) {
     return PlaceCategory.SUSHI;
   }
@@ -94,31 +218,18 @@ function mapOsmCategory(tags: Record<string, string>, requested?: string): Place
     return PlaceCategory.ROMANTIC_DATE;
   }
   if (
-    cuisine.includes("pizza") ||
-    cuisine.includes("dairy") ||
-    cuisine.includes("vegetarian") ||
-    cuisine.includes("coffee") ||
     amenity === "cafe" ||
-    amenity === "ice_cream"
+    amenity === "ice_cream" ||
+    cuisine.includes("pizza") ||
+    cuisine.includes("coffee")
   ) {
     return PlaceCategory.DAIRY_RESTAURANT;
   }
-  if (tourism === "viewpoint" || leisure === "beach" || name.includes("שקיע")) {
-    return PlaceCategory.SUNSET;
-  }
-  if (tourism === "attraction" || tourism === "museum") {
-    return PlaceCategory.ATTRACTION;
-  }
-  if (leisure === "park" || leisure === "garden") {
-    return PlaceCategory.ROMANTIC_DATE;
-  }
-  if (amenity === "restaurant" || amenity === "fast_food") {
-    return PlaceCategory.RESTAURANT;
-  }
-  if (requested === "RESTAURANT" || requested === "ROMANTIC_DATE" || requested === "ATTRACTION" || requested === "SUNSET") {
-    return requested as PlaceCategory;
-  }
-  return PlaceCategory.ATTRACTION;
+  if (tourism === "viewpoint" || leisure === "beach") return PlaceCategory.SUNSET;
+  if (tourism === "attraction" || tourism === "museum") return PlaceCategory.ATTRACTION;
+  if (leisure === "park" || leisure === "garden") return PlaceCategory.ROMANTIC_DATE;
+  if (amenity === "restaurant" || amenity === "fast_food") return PlaceCategory.RESTAURANT;
+  return PlaceCategory.RESTAURANT;
 }
 
 function pickName(tags: Record<string, string>): string | null {
@@ -129,125 +240,106 @@ function pickName(tags: Record<string, string>): string | null {
     tags.brand ||
     tags["brand:he"] ||
     tags["brand:en"];
-  const trimmed = name?.trim();
-  return trimmed || null;
+  return name?.trim() || null;
 }
 
-function pickEnglishName(tags: Record<string, string>, fallback: string): string {
-  return tags["name:en"] || tags.brand || tags.name || fallback;
+function elementToHit(element: OsmElement): NearbyHit | null {
+  const tags = element.tags;
+  if (!tags || element.id == null) return null;
+  const name = pickName(tags);
+  const lat = element.lat ?? element.center?.lat;
+  const lng = element.lon ?? element.center?.lon;
+  if (!name || lat == null || lng == null) return null;
+  const address = tags["addr:full"] ||
+    [tags["addr:street"], tags["addr:housenumber"], tags["addr:city"]]
+      .filter(Boolean)
+      .join(" ") || "ישראל";
+  return {
+    externalId: `osm:${element.type ?? "node"}:${element.id}`,
+    nameHe: name,
+    nameEn: tags["name:en"] || tags.brand || tags.name || name,
+    nameAr: tags["name:ar"] || name,
+    lat,
+    lng,
+    address,
+    category: mapOsmCategory(tags),
+  };
 }
 
-function pickArabicName(tags: Record<string, string>, fallback: string): string {
-  return tags["name:ar"] || tags["name:he"] || tags.name || fallback;
-}
-
-function buildAddress(tags: Record<string, string>): string {
-  if (tags["addr:full"]) return tags["addr:full"];
-  const parts = [
-    tags["addr:street"],
-    tags["addr:housenumber"],
-    tags["addr:city"],
-  ].filter(Boolean);
-  return parts.length > 0 ? parts.join(" ") : "ישראל";
-}
-
-function fallbackDescription(name: string, language: "he" | "en" | "ar"): string {
-  if (language === "ar") return `${name} — مكان قريب للخروج.`;
-  if (language === "en") return `${name} — a nearby spot for a night out.`;
-  return `${name} — מקום בקרבתך ליציאה.`;
-}
-
-function elementCoords(el: OsmElement): { lat: number; lng: number } | null {
-  if (el.lat != null && el.lon != null) return { lat: el.lat, lng: el.lon };
-  if (el.center) return { lat: el.center.lat, lng: el.center.lon };
-  return null;
-}
-
-async function fetchOverpass(
+async function fetchOverpassNearby(
   lat: number,
   lng: number,
-  radiusM: number,
-  category?: string
-): Promise<OsmElement[]> {
-  const filters = overpassFilters(category);
+  radiusKm: number
+): Promise<NearbyHit[]> {
+  const radiusM = radiusMeters(radiusKm);
   const around = `(around:${radiusM},${lat},${lng})`;
-  const clauses = filters
-    .map((filter) => `node${filter}${around};way${filter}${around};`)
-    .join("");
-  const query = `[out:json][timeout:20];(${clauses});out center ${MAX_PLACES};`;
+  const query =
+    `[out:json][timeout:8];(` +
+    `node["amenity"~"restaurant|cafe|bar|pub|nightclub|fast_food|ice_cream"]${around};` +
+    `node["tourism"~"attraction|museum|viewpoint"]${around};` +
+    `);out body ${MAX_PLACES};`;
 
-  let lastError: unknown;
-  for (const url of OVERPASS_URLS) {
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Accept: "application/json",
-          "User-Agent": "DateSpot/1.0 (nearby-places)",
-        },
-        body: new URLSearchParams({ data: query }).toString(),
-      });
-      if (!res.ok) {
-        lastError = new Error(`Overpass HTTP ${res.status}`);
-        continue;
-      }
-      const data = (await res.json()) as { elements?: OsmElement[] };
-      return data.elements ?? [];
-    } catch (err) {
-      lastError = err;
-    }
+  const bodies = OVERPASS_URLS.map((url) =>
+    fetchWithTimeout(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+        "User-Agent": "DateSpot/1.0 (nearby-places)",
+      },
+      body: new URLSearchParams({ data: query }).toString(),
+    }).then(async (res) => {
+      if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
+      return (await res.json()) as { elements?: OsmElement[] };
+    })
+  );
+
+  const winner = await Promise.any(bodies);
+  const hits: NearbyHit[] = [];
+  const seen = new Set<string>();
+  for (const element of winner.elements ?? []) {
+    const hit = elementToHit(element);
+    if (!hit || seen.has(hit.externalId)) continue;
+    seen.add(hit.externalId);
+    hits.push(hit);
   }
-  throw lastError instanceof Error ? lastError : new Error("Overpass request failed");
+  return hits;
 }
 
-async function upsertOsmPlace(
-  element: OsmElement,
-  language: "he" | "en" | "ar",
-  requestedCategory?: string
+async function upsertHit(
+  hit: NearbyHit,
+  language: "he" | "en" | "ar"
 ): Promise<void> {
-  const tags = element.tags;
-  if (!tags || element.id == null) return;
-  const name = pickName(tags);
-  const coords = elementCoords(element);
-  if (!name || !coords) return;
-
-  const externalId = `osm:${element.type ?? "node"}:${element.id}`;
-  const category = mapOsmCategory(tags, requestedCategory);
-  const address = buildAddress(tags);
-  const description = fallbackDescription(name, language);
-  const image = fallbackUniqueImage(externalId);
-
+  const description = fallbackDescription(hit.nameHe, language);
+  const image = fallbackUniqueImage(hit.externalId);
   await prisma.place.upsert({
-    where: { googlePlaceId: externalId },
+    where: { googlePlaceId: hit.externalId },
     create: {
-      googlePlaceId: externalId,
-      nameHe: name,
-      nameEn: pickEnglishName(tags, name),
-      nameAr: pickArabicName(tags, name),
+      googlePlaceId: hit.externalId,
+      nameHe: hit.nameHe,
+      nameEn: hit.nameEn,
+      nameAr: hit.nameAr,
       descriptionHe: description,
       descriptionEn: description,
       descriptionAr: description,
-      category,
-      latitude: coords.lat,
-      longitude: coords.lng,
-      address,
+      category: hit.category,
+      latitude: hit.lat,
+      longitude: hit.lng,
+      address: hit.address,
       priceRange: PriceRange.MODERATE,
       images: [image],
       openingHours: {},
-      phone: tags.phone || tags["contact:phone"] || undefined,
-      website: tags.website || tags["contact:website"] || undefined,
       displayOrder: 500,
     },
     update: {
-      nameHe: name,
-      nameEn: pickEnglishName(tags, name),
-      nameAr: pickArabicName(tags, name),
-      latitude: coords.lat,
-      longitude: coords.lng,
-      address,
+      nameHe: hit.nameHe,
+      nameEn: hit.nameEn,
+      nameAr: hit.nameAr,
+      latitude: hit.lat,
+      longitude: hit.lng,
+      address: hit.address,
       isActive: true,
-      category,
+      category: hit.category,
     },
   });
 }
@@ -260,14 +352,12 @@ export async function ingestOsmNearbyPlaces(options: {
   category?: string;
   cache: PlacesListCache;
 }): Promise<number> {
-  const { lat, lng, radiusKm, language, category, cache } = options;
+  const { lat, lng, radiusKm, language, cache } = options;
   const ingestKey = [
     "places:osm-ingest",
     gridCoord(lat),
     gridCoord(lng),
     Math.round(radiusKm),
-    category ?? "all",
-    language,
   ].join(":");
 
   const already = await cache.get(ingestKey);
@@ -278,27 +368,39 @@ export async function ingestOsmNearbyPlaces(options: {
   localIngestAt.set(ingestKey, Date.now());
 
   try {
-    const elements = await fetchOverpass(lat, lng, radiusMeters(radiusKm), category);
-    const seen = new Set<string>();
-    const unique: OsmElement[] = [];
-    for (const element of elements) {
-      const id = `${element.type ?? "node"}:${element.id}`;
-      if (element.id == null || seen.has(id)) continue;
-      seen.add(id);
-      unique.push(element);
+    let hits = await fetchPhotonNearby(lat, lng, radiusKm);
+    if (hits.length < 8) {
+      try {
+        const extra = await fetchOverpassNearby(lat, lng, radiusKm);
+        const seen = new Set(hits.map((hit) => hit.externalId));
+        for (const hit of extra) {
+          if (seen.has(hit.externalId)) continue;
+          seen.add(hit.externalId);
+          hits.push(hit);
+        }
+      } catch (err) {
+        console.warn("[places] Overpass fallback skipped:", err);
+      }
+    }
+
+    if (hits.length === 0) {
+      localIngestAt.delete(ingestKey);
+      return 0;
     }
 
     const saved = await Promise.allSettled(
-      unique.slice(0, MAX_PLACES).map((element) =>
-        upsertOsmPlace(element, language, category)
-      )
+      hits.slice(0, MAX_PLACES).map((hit) => upsertHit(hit, language))
     );
     const created = saved.filter((row) => row.status === "fulfilled").length;
-    await cache.set(ingestKey, "1", INGEST_TTL_SECONDS);
+    if (created > 0) {
+      await cache.set(ingestKey, "1", INGEST_TTL_SECONDS);
+    } else {
+      localIngestAt.delete(ingestKey);
+    }
     return created;
   } catch (err) {
     localIngestAt.delete(ingestKey);
-    console.warn("[places] OSM Nearby ingest skipped:", err);
+    console.warn("[places] Nearby ingest skipped:", err);
     return 0;
   }
 }
