@@ -210,7 +210,7 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
       }
 
       if (config.googlePlacesApiKey && rawPlaces.length > 0) {
-        await attachGooglePhotosToPlaces(rawPlaces, config.googlePlacesApiKey);
+        await attachGooglePhotosToPlaces(rawPlaces, config.googlePlacesApiKey, 40);
       }
 
       const withDistance = rawPlaces.map((place) => {
