@@ -210,7 +210,11 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
       }
 
       if (config.googlePlacesApiKey && rawPlaces.length > 0) {
-        await attachGooglePhotosToPlaces(rawPlaces, config.googlePlacesApiKey, 40);
+        // Fire-and-forget: don't block the response on Google photo lookups.
+        // Places without a photo yet will get one on a future request.
+        void attachGooglePhotosToPlaces(rawPlaces, config.googlePlacesApiKey, 15).catch((err) => {
+          console.warn("[places] background photo enrichment failed:", err);
+        });
       }
 
       const withDistance = rawPlaces.map((place) => {
