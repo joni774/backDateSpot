@@ -276,7 +276,8 @@ async function main() {
           nameHe,
           coords.lat,
           coords.lng,
-          apiKey
+          apiKey,
+          pickEnglishName(tags, nameHe)
         );
         images = refs.map(encodeGooglePhotoRef);
         await googlePlacesSleep(200);

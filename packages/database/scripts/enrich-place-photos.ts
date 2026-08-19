@@ -1,15 +1,16 @@
 /**
- * Fetch unique photos for each place (Google Places if configured, otherwise OSM/Wikimedia).
+ * Replace stock/empty images with Google Places photos of that business.
+ *
+ * Requires GOOGLE_PLACES_API_KEY or GOOGLE_MAPS_API_KEY.
  *
  * Usage:
- *   npx tsx scripts/enrich-place-photos.ts
+ *   pnpm db:enrich-photos
  */
 import { PrismaClient } from "@prisma/client";
 import {
-  fallbackUniqueImage,
   fetchPlaceImages,
   imageFetchSleep,
-  isGenericPlaceholder,
+  needsGooglePhoto,
 } from "../../places-logic/src/place-image-sources";
 import { getGooglePlacesApiKey } from "../../places-logic/src/google-places";
 import { loadEnvFiles } from "./load-env";
@@ -20,16 +21,19 @@ const prisma = new PrismaClient();
 
 async function main() {
   const googleKey = getGooglePlacesApiKey();
-  console.log(
-    googleKey
-      ? "Using Google Places + free fallbacks"
-      : "No Google key — using OSM / Wikimedia (free, no signup)"
-  );
+  if (!googleKey) {
+    console.error(
+      "GOOGLE_PLACES_API_KEY is missing. Add a Google Places API key (Place Photos enabled) and retry."
+    );
+    process.exit(1);
+  }
+
+  console.log("Fetching original Google photos for each place...");
 
   const places = await prisma.place.findMany({ orderBy: { displayOrder: "asc" } });
-  const toUpdate = places.filter((place) => isGenericPlaceholder(place.images));
+  const toUpdate = places.filter((place) => needsGooglePhoto(place.images));
 
-  console.log(`Found ${places.length} places, ${toUpdate.length} need unique photos`);
+  console.log(`Found ${places.length} places, ${toUpdate.length} need Google photos`);
 
   let updated = 0;
   let skipped = 0;
@@ -46,14 +50,9 @@ async function main() {
       });
 
       if (images.length === 0) {
-        const fallback = fallbackUniqueImage(place.id);
-        await prisma.place.update({
-          where: { id: place.id },
-          data: { images: [fallback] },
-        });
-        updated += 1;
-        console.log(`Fallback image for ${place.nameHe}`);
-        await imageFetchSleep(1100);
+        skipped += 1;
+        console.log(`No Google photo for ${place.nameHe}`);
+        await imageFetchSleep(250);
         continue;
       }
 
@@ -63,15 +62,12 @@ async function main() {
       });
 
       updated += 1;
-      const preview = images[0].startsWith("gpl:")
-        ? "Google Places"
-        : images[0].slice(0, 70);
-      console.log(`Updated ${place.nameHe} → ${preview}`);
-      await imageFetchSleep(1100);
+      console.log(`Updated ${place.nameHe} → Google Places`);
+      await imageFetchSleep(250);
     } catch (err) {
       console.warn(`Failed for ${place.nameHe}:`, err);
       skipped += 1;
-      await imageFetchSleep(1100);
+      await imageFetchSleep(250);
     }
   }
 

@@ -1,4 +1,4 @@
-import type { PlaceCategory } from "@datespot/database";
+import { prisma, type Place, type PlaceCategory } from "@datespot/database";
 import {
   encodeGooglePhotoRef,
   fetchGooglePlacePhotoRefs,
@@ -199,10 +199,14 @@ export function isGenericPlaceholder(images: string[]): boolean {
   if (images.length === 0) return true;
   return images.every(
     (url) =>
-      url.startsWith("gpl:") ||
       url.includes("images.unsplash.com") ||
       url.includes("picsum.photos")
   );
+}
+
+/** True when the place still has no Google photo of that business. */
+export function needsGooglePhoto(images: string[]): boolean {
+  return !images.some((url) => url.startsWith("gpl:"));
 }
 
 export async function fetchPlaceImages(options: {
@@ -221,9 +225,11 @@ export async function fetchPlaceImages(options: {
       nameHe,
       latitude,
       longitude,
-      googleKey
+      googleKey,
+      nameEn
     );
     if (refs.length > 0) return refs.map(encodeGooglePhotoRef);
+    return [];
   }
 
   const osmImage = await fetchOsmImageUrl(latitude, longitude);
@@ -241,6 +247,46 @@ export async function fetchPlaceImages(options: {
   }
 
   return [];
+}
+
+const FOOD_CATEGORIES = new Set<PlaceCategory>([
+  "RESTAURANT",
+  "SUSHI",
+  "MEAT_RESTAURANT",
+  "DAIRY_RESTAURANT",
+]);
+
+/** Fetch Google photos for restaurants still using stock/empty images. Mutates `places`. */
+export async function attachGooglePhotosToPlaces(
+  places: Place[],
+  apiKey: string,
+  limit = 4
+): Promise<void> {
+  const pending = [...places]
+    .sort((a, b) => Number(FOOD_CATEGORIES.has(b.category)) - Number(FOOD_CATEGORIES.has(a.category)))
+    .filter((place) => needsGooglePhoto(place.images))
+    .slice(0, limit);
+
+  for (const place of pending) {
+    try {
+      const refs = await fetchGooglePlacePhotoRefs(
+        place.nameHe,
+        place.latitude,
+        place.longitude,
+        apiKey,
+        place.nameEn
+      );
+      if (refs.length === 0) continue;
+      const images = refs.map(encodeGooglePhotoRef);
+      await prisma.place.update({
+        where: { id: place.id },
+        data: { images },
+      });
+      place.images = images;
+    } catch (err) {
+      console.warn(`[places] Google photo skipped for ${place.nameHe}:`, err);
+    }
+  }
 }
 
 export function fallbackUniqueImage(placeId: string): string {

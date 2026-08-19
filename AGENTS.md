@@ -16,11 +16,13 @@ Instructions for AI coding agents working in this repository.
 | `apps/auth-service/**` | [apps/auth-service/README.md](apps/auth-service/README.md) |
 | `apps/places-service/**` | [apps/places-service/README.md](apps/places-service/README.md) |
 | `apps/admin-service/**` | [apps/admin-service/README.md](apps/admin-service/README.md) |
+| `apps/ai-service/**` | [apps/ai-service/README.md](apps/ai-service/README.md) |
 | `apps/gateway/**` | [apps/gateway/README.md](apps/gateway/README.md) |
 | `packages/database/**` | [packages/database/README.md](packages/database/README.md) |
 | `packages/shared-types/**` | [packages/shared-types/README.md](packages/shared-types/README.md) |
 | `packages/utils/**` | [packages/utils/README.md](packages/utils/README.md) |
 | `packages/auth-logic/**` | Shared auth route handlers (`createAuthRouter`) |
+| `packages/ai-logic/**` | Shared AI chat + security layers (`createAiRouter`); [docs/AI_AGENT_SECURITY_POLICY.md](docs/AI_AGENT_SECURITY_POLICY.md) |
 
 ## Commands (from repo root)
 

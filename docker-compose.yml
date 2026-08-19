@@ -6,7 +6,7 @@
 #
 # Full microservices:
 #   docker compose --profile microservices up --build
-#   → postgres, redis, auth/places/admin services + gateway on :3000
+#   → postgres, redis, auth/places/admin/ai services + gateway on :3000
 #
 # db-init runs migrations + seed before app services start.
 
@@ -79,6 +79,9 @@ services:
       GOOGLE_PLACES_API_KEY: ${GOOGLE_PLACES_API_KEY:-}
       GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
       PUBLIC_API_URL: ${PUBLIC_API_URL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      OPENAI_CLASSIFIER_MODEL: ${OPENAI_CLASSIFIER_MODEL:-gpt-4o-mini}
     depends_on:
       postgres:
         condition: service_healthy
@@ -189,6 +192,40 @@ services:
       retries: 10
       start_period: 120s
 
+  ai-service:
+    profiles:
+      - microservices
+    build:
+      context: .
+      dockerfile: apps/ai-service/Dockerfile
+    container_name: datespot-ai
+    restart: unless-stopped
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: 3004
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-datespot_dev}
+      JWT_SECRET: ${JWT_SECRET}
+      REDIS_URL: redis://redis:6379
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      OPENAI_CLASSIFIER_MODEL: ${OPENAI_CLASSIFIER_MODEL:-gpt-4o-mini}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3004/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+
   gateway:
     profiles:
       - microservices
@@ -204,6 +241,8 @@ services:
       places-service:
         condition: service_healthy
       admin-service:
+        condition: service_healthy
+      ai-service:
         condition: service_healthy
     networks:
       - internal

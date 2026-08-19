@@ -98,7 +98,7 @@ const purchaseSchema = z.object({
 });
 
 const TIER_PRICES_AGOROT: Record<"VIP" | "DATING", number> = {
-  VIP: 2990,
+  VIP: 1990,
   DATING: 3990,
 };
 

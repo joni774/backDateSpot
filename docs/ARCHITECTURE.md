@@ -26,10 +26,12 @@ When changing API behavior, update the relevant microservice **and** the matchin
 | `apps/auth-service` | `auth-service` | 3001 (internal) | `/api/auth` — registration, login, password change |
 | `apps/places-service` | `places-service` | 3002 (internal) | `/api/places` — list, detail, save/unsave |
 | `apps/admin-service` | `admin-service` | 3003 (internal) | `/api/admin` — stats, places CRUD, user management |
+| `apps/ai-service` | `ai-service` | 3004 (internal) | `/api/ai` — LLM chat + 3-layer security |
 | `apps/gateway` | — | 3000 (external) | nginx reverse proxy to microservices |
 | `packages/database` | `@datespot/database` | — | Prisma schema, migrations, seed |
 | `packages/shared-types` | `@datespot/shared-types` | — | Shared TypeScript types (sync with client) |
 | `packages/utils` | `@datespot/utils` | — | Haversine distance, password generation |
+| `packages/ai-logic` | `@datespot/ai-logic` | — | `createAiRouter`, OpenAI agent, filters |
 
 ## Request flow (Docker)
 
@@ -40,6 +42,7 @@ flowchart LR
   authSvc["auth-service:3001"]
   placesSvc["places-service:3002"]
   adminSvc["admin-service:3003"]
+  aiSvc["ai-service:3004"]
   postgres["PostgreSQL"]
   redis["Redis"]
 
@@ -47,11 +50,14 @@ flowchart LR
   gateway -->|"/api/auth"| authSvc
   gateway -->|"/api/places"| placesSvc
   gateway -->|"/api/admin"| adminSvc
+  gateway -->|"/api/ai"| aiSvc
   authSvc --> postgres
   placesSvc --> postgres
   adminSvc --> postgres
+  aiSvc --> postgres
   placesSvc --> redis
   adminSvc --> redis
+  aiSvc --> redis
 ```
 
 Gateway routing is defined in [apps/gateway/nginx.conf](../apps/gateway/nginx.conf):
@@ -61,6 +67,7 @@ Gateway routing is defined in [apps/gateway/nginx.conf](../apps/gateway/nginx.co
 | `/api/auth` | `auth-service:3001` |
 | `/api/places` | `places-service:3002` |
 | `/api/admin` | `admin-service:3003` |
+| `/api/ai` | `ai-service:3004` |
 | `/health` | Gateway stub (200 OK) |
 
 Infrastructure services (Docker only): `postgres`, `redis`, `db-init` (migrations + seed).
@@ -74,28 +81,35 @@ flowchart TD
   auth["apps/auth-service"]
   places["apps/places-service"]
   admin["apps/admin-service"]
+  ai["apps/ai-service"]
   db["packages/database"]
   types["packages/shared-types"]
   utils["packages/utils"]
+  aiLogic["packages/ai-logic"]
   client["datespot-client"]
 
   gateway --> auth
   gateway --> places
   gateway --> admin
+  gateway --> ai
   api --> db
   api --> types
   api --> utils
+  api --> aiLogic
   auth --> db
   auth --> utils
   places --> db
   places --> utils
   admin --> db
+  ai --> db
+  ai --> aiLogic
+  aiLogic --> db
   client --> types
 ```
 
 - All Express apps import Prisma via `@datespot/database`.
-- `auth-service`, `places-service`, and `admin-service` are independent; they share no code beyond workspace packages.
-- `apps/api` duplicates route logic from the three microservices for local development.
+- Microservices are independent; they share no code beyond workspace packages (`auth-logic`, `places-logic`, `admin-logic`, `ai-logic`).
+- `apps/api` mounts the same `create*Router` factories for local development.
 - `packages/shared-types` must stay aligned with `datespot-client/packages/shared-types`.
 
 ## Cross-cutting concerns
@@ -107,6 +121,7 @@ flowchart TD
 | Env validation | Each app's `src/config/env.ts` | Zod schemas; fail fast at startup |
 | FREE tier lock | `places-service` / `apps/api` places routes | First 5 places unlocked; rest marked `isLocked` |
 | Redis cache | `places-service`, `admin-service` | Key prefix `places:list:*`, TTL 120s; invalidated on admin place mutations |
+| AI chat security | `packages/ai-logic` | 3-layer: pre-filter, system prompt + `search_places`, post-filter; see [AI_AGENT_SECURITY_POLICY.md](AI_AGENT_SECURITY_POLICY.md) |
 | i18n | Places routes | Query param `language`: `he`, `en`, `ar` |
 | Admin UI | Mobile client | This repo exposes `/api/admin/*` only; no web admin panel |
 

@@ -28,6 +28,10 @@ export interface PlaceListItem {
   openingHours: Record<string, string>;
   isLocked?: boolean;
   isSponsored?: boolean;
+  latitude?: number;
+  longitude?: number;
+  address?: string;
+  phone?: string | null;
 }
 
 export interface PlaceDetail extends PlaceListItem {
@@ -134,6 +138,7 @@ export interface AiPlaceRecommendation {
   distanceKm: number | null;
   isOpen: boolean;
   isSponsored?: boolean;
+  imageUrl?: string | null;
 }
 
 export interface AiRecommendations {
@@ -160,6 +165,7 @@ export interface AiChatResponse {
   step: string;
   quickReplies: AiQuickReply[];
   advanced?: boolean;
+  quotaExceeded?: boolean;
 }
 
 export interface AiQuota {

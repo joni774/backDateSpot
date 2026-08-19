@@ -1,6 +1,6 @@
 import type { Place, PlaceCategory, PriceRange } from "@datespot/database";
 import { getDistanceKm } from "@datespot/utils";
-import { isPlaceOpenNow, localizePlace } from "@datespot/places-logic";
+import { isPlaceOpenNow, localizePlace, resolvePlaceImageUrls } from "@datespot/places-logic";
 
 export type AiLanguage = "he" | "en" | "ar";
 export type AiStep = "mood" | "category" | "budget" | "radius" | "partySize" | "done";
@@ -54,6 +54,8 @@ export interface AiPlaceRecommendation {
   priceRange: PriceRange;
   distanceKm: number | null;
   isOpen: boolean;
+  isSponsored?: boolean;
+  imageUrl?: string | null;
 }
 
 export interface AiRecommendations {
@@ -61,7 +63,8 @@ export interface AiRecommendations {
   alternatives: AiPlaceRecommendation[];
 }
 
-const FREE_DAILY_LIMIT = 3;
+const FREE_DAILY_LIMIT = 1;
+const FREE_PLACE_COUNT = 5;
 
 const MOOD_KEYWORDS: Record<string, string[]> = {
   romantic: ["רומנטי", "romantic", "דייט", "date", "love", "אהבה"],
@@ -70,15 +73,27 @@ const MOOD_KEYWORDS: Record<string, string[]> = {
   celebrate: ["לחגוג", "celebrate", "birthday", "יום הולדת", "special"],
 };
 
+/** Specific food types before generic RESTAURANT so "אוכל סושי" → SUSHI, not RESTAURANT. */
 const CATEGORY_KEYWORDS: Record<PlaceCategory, string[]> = {
-  ROMANTIC_DATE: ["רומנטי", "romantic", "דייט", "date"],
-  RESTAURANT: ["מסעד", "restaurant", "אוכל", "food"],
+  SUSHI: ["סושי", "sushi", "יפני", "japanese"],
   DAIRY_RESTAURANT: ["חלב", "dairy", "כשר"],
   MEAT_RESTAURANT: ["בשר", "meat", "steak", "גריל"],
-  SUSHI: ["סושי", "sushi", "יפני", "japanese"],
+  ROMANTIC_DATE: ["רומנטי", "romantic", "דייט", "date"],
   SUNSET: ["שקיע", "sunset", "נוף", "view"],
   ATTRACTION: ["אטרקצ", "attraction", "בילוי", "activity", "fun"],
+  RESTAURANT: ["מסעד", "restaurant", "אוכל", "food"],
 };
+
+/** Parse order: specific categories win over generic ones (object key order is not enough alone). */
+const CATEGORY_PARSE_ORDER: PlaceCategory[] = [
+  "SUSHI",
+  "DAIRY_RESTAURANT",
+  "MEAT_RESTAURANT",
+  "ROMANTIC_DATE",
+  "SUNSET",
+  "ATTRACTION",
+  "RESTAURANT",
+];
 
 const BUDGET_KEYWORDS: Record<PriceRange, string[]> = {
   FREE: ["חינם", "free", "0", "budget:free"],
@@ -93,6 +108,10 @@ export function getIsraelDayKey(): string {
 
 export function getFreeDailyLimit(): number {
   return FREE_DAILY_LIMIT;
+}
+
+export function hasUnlimitedAi(tier: string): boolean {
+  return tier === "VIP";
 }
 
 function includesKeyword(text: string, keywords: string[]): boolean {
@@ -119,10 +138,19 @@ export function parseMood(text: string): string | undefined {
 export function parseCategory(text: string): PlaceCategory | undefined {
   const pref = parsePrefixed(text, "category") as PlaceCategory | null;
   if (pref && pref in CATEGORY_KEYWORDS) return pref;
-  for (const [cat, keys] of Object.entries(CATEGORY_KEYWORDS) as [PlaceCategory, string[]][]) {
-    if (includesKeyword(text, keys)) return cat;
+
+  // Prefer longest keyword hit so "אוכל סושי" picks SUSHI over RESTAURANT.
+  let best: PlaceCategory | undefined;
+  let bestLen = 0;
+  for (const cat of CATEGORY_PARSE_ORDER) {
+    for (const key of CATEGORY_KEYWORDS[cat]) {
+      if (includesKeyword(text, [key]) && key.length > bestLen) {
+        best = cat;
+        bestLen = key.length;
+      }
+    }
   }
-  return undefined;
+  return best;
 }
 
 export function parseBudget(text: string): PriceRange | undefined {
@@ -336,7 +364,7 @@ export function applyQuickModeDefaults(
 
 /**
  * Progressive place lookup: try preferred filters, then relax until we find something.
- * Prevents empty "no results" when budget/category don't match seed data.
+ * Keep the chosen category while expanding radius — only drop category as last resort.
  */
 export async function findRecommendedPlaces(
   findMany: (where: {
@@ -347,10 +375,15 @@ export async function findRecommendedPlaces(
   ctx: AiContext,
   language: AiLanguage
 ): Promise<AiPlaceRecommendation[]> {
+  const baseRadius = ctx.radiusKm ?? 50;
+  const wideRadius = Math.max(baseRadius, 50);
+
   const attempts: Array<{ category?: PlaceCategory; budget?: PriceRange; radiusKm: number }> = [
-    { category: ctx.category, budget: ctx.budget, radiusKm: ctx.radiusKm ?? 50 },
-    { category: ctx.category, budget: undefined, radiusKm: ctx.radiusKm ?? 50 },
-    { category: undefined, budget: undefined, radiusKm: Math.max(ctx.radiusKm ?? 50, 50) },
+    { category: ctx.category, budget: ctx.budget, radiusKm: baseRadius },
+    { category: ctx.category, budget: undefined, radiusKm: baseRadius },
+    // Same category, wider area — so "סושי" still returns sushi when nearby radius was too tight.
+    { category: ctx.category, budget: undefined, radiusKm: wideRadius },
+    { category: undefined, budget: undefined, radiusKm: wideRadius },
   ];
 
   for (const attempt of attempts) {
@@ -393,6 +426,8 @@ export function serializePlace(
     lat != null && lng != null
       ? getDistanceKm(lat, lng, place.latitude, place.longitude)
       : null;
+  const apiBase = (process.env.PUBLIC_API_URL || "http://localhost:3000").replace(/\/$/, "");
+  const imageUrl = resolvePlaceImageUrls(place.images ?? [], apiBase)[0] ?? null;
   return {
     id: place.id,
     name,
@@ -401,7 +436,17 @@ export function serializePlace(
     priceRange: place.priceRange,
     distanceKm: distanceKm != null ? Math.round(distanceKm * 10) / 10 : null,
     isOpen: isPlaceOpenNow(place.openingHours),
+    imageUrl,
   };
+}
+
+function isAiSponsored(place: Place, now = Date.now()): boolean {
+  if (place.sponsoredUntil == null) return false;
+  const until =
+    place.sponsoredUntil instanceof Date
+      ? place.sponsoredUntil.getTime()
+      : new Date(place.sponsoredUntil as unknown as string).getTime();
+  return !Number.isNaN(until) && until > now;
 }
 
 export function rankPlaces(
@@ -420,14 +465,8 @@ export function rankPlaces(
     }))
     .filter(({ rec }) => rec.distanceKm == null || rec.distanceKm <= radius)
     .sort((a, b) => {
-      const aSponsored =
-        a.place.sponsoredUntil != null && a.place.sponsoredUntil.getTime() > Date.now()
-          ? 1
-          : 0;
-      const bSponsored =
-        b.place.sponsoredUntil != null && b.place.sponsoredUntil.getTime() > Date.now()
-          ? 1
-          : 0;
+      const aSponsored = isAiSponsored(a.place) ? 1 : 0;
+      const bSponsored = isAiSponsored(b.place) ? 1 : 0;
       if (aSponsored !== bSponsored) return bSponsored - aSponsored;
       if (aSponsored && bSponsored) {
         const p = b.place.sponsoredPriority - a.place.sponsoredPriority;
@@ -441,8 +480,7 @@ export function rankPlaces(
     })
     .map(({ place, rec }) => ({
       ...rec,
-      isSponsored:
-        place.sponsoredUntil != null && place.sponsoredUntil.getTime() > Date.now(),
+      isSponsored: isAiSponsored(place),
     }));
 }
 
@@ -452,7 +490,7 @@ export function buildRecommendations(
   if (ranked.length === 0) return null;
   return {
     primary: ranked[0],
-    alternatives: ranked.slice(1, 4),
+    alternatives: ranked.slice(1, FREE_PLACE_COUNT),
   };
 }
 
@@ -464,10 +502,10 @@ export function noResultsMessage(lang: AiLanguage): string {
 
 export function quotaExceededMessage(lang: AiLanguage): string {
   if (lang === "he")
-    return `הגעת למכסת ${FREE_DAILY_LIMIT} שאילתות יומיות (FREE).`;
+    return "הגעת למכסת התכתבות עם AI. קיבלת 5 מקומות בחינם — להמשך ללא הגבלה נדרש מנוי ב־₪19.90 לחודש.";
   if (lang === "ar")
-    return `وصلت إلى حد ${FREE_DAILY_LIMIT} استفسارات يومية (FREE).`;
-  return `Daily limit of ${FREE_DAILY_LIMIT} queries reached (FREE).`;
+    return "وصلت إلى حد المراسلة مع AI. للمتابعة بلا حدود يلزم اشتراك بـ ₪19.90 شهرياً.";
+  return "You've reached your AI chat quota. Subscribe for ₪19.90/month for unlimited AI chat.";
 }
 
 export function getQuickReplies(step: AiStep, lang: AiLanguage): string[] {

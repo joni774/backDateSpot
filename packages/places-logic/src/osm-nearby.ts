@@ -6,7 +6,6 @@ import {
 import { getDistanceKm } from "@datespot/utils";
 import type { PlacesListCache } from "./cache";
 import { classifyFoodName } from "./category-filter";
-import { fallbackUniqueImage } from "./place-image-sources";
 
 const PHOTON_REVERSE_URL = "https://photon.komoot.io/reverse";
 const PHOTON_SEARCH_URL = "https://photon.komoot.io/api/";
@@ -356,7 +355,6 @@ async function upsertHit(
   language: "he" | "en" | "ar"
 ): Promise<void> {
   const description = fallbackDescription(hit.nameHe, language);
-  const image = fallbackUniqueImage(hit.externalId);
   await prisma.place.upsert({
     where: { googlePlaceId: hit.externalId },
     create: {
@@ -372,7 +370,7 @@ async function upsertHit(
       longitude: hit.lng,
       address: hit.address,
       priceRange: PriceRange.MODERATE,
-      images: [image],
+      images: [],
       openingHours: {},
       displayOrder: 500,
     },

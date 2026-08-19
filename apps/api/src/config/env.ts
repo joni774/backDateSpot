@@ -18,6 +18,9 @@ const envSchema = z.object({
   GOOGLE_PLACES_API_KEY: z.string().optional(),
   GOOGLE_MAPS_API_KEY: z.string().optional(),
   PUBLIC_API_URL: z.string().optional(),
+  OPENAI_API_KEY: z.string().optional(),
+  OPENAI_MODEL: z.string().default("gpt-4o-mini"),
+  OPENAI_CLASSIFIER_MODEL: z.string().default("gpt-4o-mini"),
 });
 
 export type Env = z.infer<typeof envSchema>;

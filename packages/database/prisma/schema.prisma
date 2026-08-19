@@ -285,3 +285,14 @@ model AiDailyUsage {
 
   @@unique([userId, day])
 }
+
+// Blocked AI chat attempts (pre/post filter) for security audit.
+model AiSecurityLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  sessionId  String?
+  layer      String // "PRE_FILTER" | "POST_FILTER"
+  reason     String
+  rawMessage String?
+  createdAt  DateTime @default(now())
+}

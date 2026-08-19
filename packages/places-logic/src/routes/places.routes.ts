@@ -3,7 +3,6 @@ import { z } from "zod";
 import {
   prisma,
   PlaceCategory,
-  SubscriptionTier,
   LeadType,
   type Place,
 } from "@datespot/database";
@@ -16,6 +15,7 @@ import {
 } from "../cache";
 import { ingestGoogleNearbyPlaces } from "../google-nearby";
 import { ingestOsmNearbyPlaces } from "../osm-nearby";
+import { attachGooglePhotosToPlaces } from "../place-image-sources";
 import { placeMatchesCategory, prismaCategoryFilter } from "../category-filter";
 import {
   buildGooglePhotoFetchUrl,
@@ -115,6 +115,8 @@ function mapPlaceListItem(
     isSponsored: isSponsoredActive(place),
     latitude: place.latitude,
     longitude: place.longitude,
+    address: place.address,
+    phone: place.phone,
   };
 }
 
@@ -133,14 +135,12 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
   /**
    * GET / — nearby places sorted by distance.
    * Bounding-box pre-filter in Prisma, then exact Haversine sort.
-   * FREE tier: first 5 unlocked, rest marked locked.
+   * All places are unlocked; subscription is AI-chat only.
    */
   router.get("/", config.optionalAuth, async (req, res) => {
     try {
       const query = listQuerySchema.parse(req.query);
       const baseUrl = getRequestBaseUrl(req, config.publicApiUrl);
-      const tier = req.user?.subscriptionTier ?? SubscriptionTier.FREE;
-      const isVip = tier === SubscriptionTier.VIP;
 
       const cacheKey = `${PLACES_LIST_KEY}:${query.category ?? "all"}:${query.lat ?? ""}:${query.lng ?? ""}:${query.radius}`;
 
@@ -209,6 +209,10 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
         }
       }
 
+      if (config.googlePlacesApiKey && rawPlaces.length > 0) {
+        await attachGooglePhotosToPlaces(rawPlaces, config.googlePlacesApiKey);
+      }
+
       const withDistance = rawPlaces.map((place) => {
         let distance: number | null = null;
         if (query.lat != null && query.lng != null) {
@@ -255,10 +259,9 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
         );
       }
 
-      const results = filtered.map(({ place, distance }, index) => {
-        const isLocked = !isVip && index >= 5;
-        return mapPlaceListItem(place, query.language, distance, isLocked, baseUrl);
-      });
+      const results = filtered.map(({ place, distance }) =>
+        mapPlaceListItem(place, query.language, distance, false, baseUrl)
+      );
 
       res.json({ places: results });
     } catch (err) {
@@ -566,8 +569,7 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
   });
 
   /**
-   * GET /:id — full place details.
-   * Freemium gate: FREE users cannot access places beyond index 5; VIP unlocks all.
+   * GET /:id — full place details. Browsing is free for every tier.
    */
   router.get("/:id", config.optionalAuth, async (req, res) => {
     try {
@@ -579,17 +581,6 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
       if (!place || !place.isActive) {
         res.status(404).json({ error: "Place not found" });
         return;
-      }
-
-      const tier = req.user?.subscriptionTier ?? SubscriptionTier.FREE;
-      if (tier !== SubscriptionTier.VIP) {
-        const rank = await prisma.place.count({
-          where: { isActive: true, displayOrder: { lt: place.displayOrder } },
-        });
-        if (rank >= 5) {
-          res.status(403).json({ error: "VIP required" });
-          return;
-        }
       }
 
       await prisma.place.update({

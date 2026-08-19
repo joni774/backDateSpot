@@ -23,3 +23,7 @@ export {
   isPlaceOpenNow,
   type Language,
 } from "./utils/place.util";
+export {
+  attachGooglePhotosToPlaces,
+  needsGooglePhoto,
+} from "./place-image-sources";
