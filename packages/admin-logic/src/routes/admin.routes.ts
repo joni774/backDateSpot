@@ -314,9 +314,11 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
   router.post("/enrich-photos", async (req, res) => {
     try {
       const limit = Math.min(60, Math.max(1, parseInt(String(req.body?.limit ?? req.query.limit ?? "20"), 10)));
+      const offset = Math.max(0, parseInt(String(req.body?.offset ?? req.query.offset ?? "0"), 10));
 
-      const places = await prisma.place.findMany({ orderBy: { displayOrder: "asc" } });
-      const pending = places.filter((place) => needsGooglePhoto(place.images)).slice(0, limit);
+      const places = await prisma.place.findMany({ orderBy: { id: "asc" } });
+      const slice = places.slice(offset, offset + limit);
+      const pending = slice.filter((place) => needsGooglePhoto(place.images));
 
       let updated = 0;
       let skipped = 0;
@@ -351,14 +353,19 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
 
       await cache.onPlacesMutated?.();
 
-      const remaining = places.filter((place) => needsGooglePhoto(place.images)).length - pending.length + skipped;
+      const stillNeeding = places.filter((place) => needsGooglePhoto(place.images)).length - updated;
+      const nextOffset = offset + limit;
 
       res.json({
         totalPlaces: places.length,
-        processedThisBatch: pending.length,
+        offset,
+        nextOffset,
+        done: nextOffset >= places.length,
+        sliceSize: slice.length,
+        candidatesInSlice: pending.length,
         updated,
         skipped,
-        remainingNeedingPhotos: Math.max(0, remaining),
+        stillNeedingPhotos: Math.max(0, stillNeeding),
         details,
       });
     } catch (err) {
