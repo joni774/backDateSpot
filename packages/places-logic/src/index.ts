@@ -26,4 +26,5 @@ export {
 export {
   attachGooglePhotosToPlaces,
   needsGooglePhoto,
+  fetchPlaceImages,
 } from "./place-image-sources";

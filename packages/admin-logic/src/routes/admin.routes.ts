@@ -7,7 +7,7 @@ import {
   PriceRange,
   LeadType,
 } from "@datespot/database";
-import { placeCategorySchema } from "@datespot/places-logic";
+import { placeCategorySchema, fetchPlaceImages, needsGooglePhoto } from "@datespot/places-logic";
 import { noopAdminCacheHooks, type AdminCacheHooks } from "../cache";
 
 const optionalUrl = z
@@ -308,6 +308,62 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
       }
       console.error(err);
       res.status(500).json({ error: "Failed to update subscription" });
+    }
+  });
+
+  router.post("/enrich-photos", async (req, res) => {
+    try {
+      const limit = Math.min(60, Math.max(1, parseInt(String(req.body?.limit ?? req.query.limit ?? "20"), 10)));
+
+      const places = await prisma.place.findMany({ orderBy: { displayOrder: "asc" } });
+      const pending = places.filter((place) => needsGooglePhoto(place.images)).slice(0, limit);
+
+      let updated = 0;
+      let skipped = 0;
+      const details: Array<{ name: string; result: "updated" | "skipped" }> = [];
+
+      for (const place of pending) {
+        try {
+          const images = await fetchPlaceImages({
+            nameHe: place.nameHe,
+            nameEn: place.nameEn,
+            category: place.category,
+            latitude: place.latitude,
+            longitude: place.longitude,
+            address: place.address,
+          });
+
+          if (images.length === 0) {
+            skipped += 1;
+            details.push({ name: place.nameHe, result: "skipped" });
+            continue;
+          }
+
+          await prisma.place.update({ where: { id: place.id }, data: { images } });
+          updated += 1;
+          details.push({ name: place.nameHe, result: "updated" });
+        } catch (err) {
+          console.warn(`[admin] enrich-photos failed for ${place.nameHe}:`, err);
+          skipped += 1;
+          details.push({ name: place.nameHe, result: "skipped" });
+        }
+      }
+
+      await cache.onPlacesMutated?.();
+
+      const remaining = places.filter((place) => needsGooglePhoto(place.images)).length - pending.length + skipped;
+
+      res.json({
+        totalPlaces: places.length,
+        processedThisBatch: pending.length,
+        updated,
+        skipped,
+        remainingNeedingPhotos: Math.max(0, remaining),
+        details,
+      });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Failed to enrich photos" });
     }
   });
 
