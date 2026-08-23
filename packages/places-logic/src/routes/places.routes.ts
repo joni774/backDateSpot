@@ -29,17 +29,50 @@ import {
   localizePlace,
 } from "../utils/place.util";
 
-const listQuerySchema = z.object({
-  category: placeCategorySchema.optional(),
-  lat: z.coerce.number().optional(),
-  lng: z.coerce.number().optional(),
-  radius: z.coerce
-    .number()
-    .default(10)
-    .transform((n) => Math.min(200, Math.max(1, Number.isFinite(n) ? n : 10))),
-  language: z.enum(["he", "en", "ar"]).default("he"),
-  q: z.string().min(1).optional(),
-});
+const listQuerySchema = z
+  .object({
+    category: placeCategorySchema.optional(),
+    lat: z.coerce.number().optional(),
+    lng: z.coerce.number().optional(),
+    radius: z.coerce.number().optional(),
+    radiusKm: z.coerce.number().optional(),
+    language: z.enum(["he", "en", "ar"]).default("he"),
+    q: z.string().min(1).optional(),
+  })
+  .transform((value) => {
+    const raw = value.radius ?? value.radiusKm ?? 10;
+    const radius = Math.min(200, Math.max(1, Number.isFinite(raw) ? raw : 10));
+    return {
+      category: value.category,
+      lat: value.lat,
+      lng: value.lng,
+      radius,
+      language: value.language,
+      q: value.q,
+    };
+  });
+
+const INGEST_WAIT_MS = 4_000;
+const RADIUS_EXPANSION_KM = [10, 20, 50, 100] as const;
+
+function expansionRadii(requestedKm: number): number[] {
+  const larger = RADIUS_EXPANSION_KM.filter((km) => km > requestedKm);
+  return [requestedKm, ...larger];
+}
+
+async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise.then((value) => value),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 const saveSchema = z.object({
   placeId: z.string().uuid(),
@@ -148,19 +181,15 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
       const query = listQuerySchema.parse(req.query);
       const baseUrl = getRequestBaseUrl(req, config.publicApiUrl);
 
-      const cacheKey = `${PLACES_LIST_KEY}:${query.category ?? "all"}:${query.lat ?? ""}:${query.lng ?? ""}:${query.radius}`;
-
-      let rawPlaces: Place[] | null = null;
-      let ingested = 0;
-
-      if (query.lat != null && query.lng != null) {
+      const runIngest = async (radiusKm: number) => {
+        if (query.lat == null || query.lng == null) return;
         if (config.googlePlacesApiKey) {
           try {
             await ingestGoogleNearbyPlaces({
               apiKey: config.googlePlacesApiKey,
               lat: query.lat,
               lng: query.lng,
-              radiusKm: query.radius,
+              radiusKm,
               language: query.language,
               category: query.category,
               cache,
@@ -170,24 +199,29 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
           }
         }
         try {
-          ingested = await ingestOsmNearbyPlaces({
+          await ingestOsmNearbyPlaces({
             lat: query.lat,
             lng: query.lng,
-            radiusKm: query.radius,
+            radiusKm,
             language: query.language,
             cache,
           });
         } catch (err) {
           console.warn("[places] OSM Nearby ingest skipped:", err);
         }
-      }
+      };
 
-      if (ingested === 0) {
+      const loadPlacesForRadius = async (radiusKm: number): Promise<Place[]> => {
+        const cacheKey = `${PLACES_LIST_KEY}:${query.category ?? "all"}:${query.lat ?? ""}:${query.lng ?? ""}:${radiusKm}`;
         const cached = await cache.get(cacheKey);
-        if (cached) rawPlaces = JSON.parse(cached) as Place[];
-      }
+        if (cached) {
+          try {
+            return JSON.parse(cached) as Place[];
+          } catch {
+            // fall through to DB
+          }
+        }
 
-      if (!rawPlaces) {
         const where: {
           isActive: boolean;
           category?: PlaceCategory | { in: PlaceCategory[] };
@@ -198,26 +232,43 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
         if (categoryFilter) where.category = categoryFilter;
 
         if (query.lat != null && query.lng != null) {
-          const bb = radiusToBoundingBox(query.lat, query.lng, query.radius);
+          const bb = radiusToBoundingBox(query.lat, query.lng, radiusKm);
           where.latitude = { gte: bb.minLat, lte: bb.maxLat };
           where.longitude = { gte: bb.minLng, lte: bb.maxLng };
         }
 
-        rawPlaces = await prisma.place.findMany({ where });
+        let rows = await prisma.place.findMany({ where });
         if (query.category) {
-          rawPlaces = rawPlaces.filter((place) =>
-            placeMatchesCategory(place, query.category)
-          );
+          rows = rows.filter((place) => placeMatchesCategory(place, query.category));
         }
+        if (rows.length > 0) {
+          await cache.set(cacheKey, JSON.stringify(rows), PLACES_LIST_TTL);
+        }
+        return rows;
+      };
 
-        if (rawPlaces.length > 0) {
-          await cache.set(cacheKey, JSON.stringify(rawPlaces), PLACES_LIST_TTL);
+      // Fast path: serve DB results first so the app never waits on Google/OSM.
+      let effectiveRadius = query.radius;
+      let rawPlaces = await loadPlacesForRadius(effectiveRadius);
+
+      if (query.lat != null && query.lng != null) {
+        if (rawPlaces.length === 0) {
+          // Empty: wait briefly for ingest, then progressively widen the radius.
+          for (const radiusKm of expansionRadii(query.radius)) {
+            await withTimeout(runIngest(radiusKm), INGEST_WAIT_MS);
+            rawPlaces = await loadPlacesForRadius(radiusKm);
+            effectiveRadius = radiusKm;
+            if (rawPlaces.length > 0) break;
+          }
+        } else {
+          // Already have places — refresh catalogue in the background.
+          void runIngest(query.radius).catch((err) => {
+            console.warn("[places] background ingest failed:", err);
+          });
         }
       }
 
       if (config.googlePlacesApiKey && rawPlaces.length > 0) {
-        // Fire-and-forget: don't block the response on Google photo lookups.
-        // Places without a photo yet will get one on a future request.
         void attachGooglePhotosToPlaces(rawPlaces, config.googlePlacesApiKey, 15).catch((err) => {
           console.warn("[places] background photo enrichment failed:", err);
         });
@@ -254,7 +305,7 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
       }
       if (query.lat != null && query.lng != null) {
         filtered = filtered.filter(
-          (p) => p.distance === null || p.distance <= query.radius
+          (p) => p.distance === null || p.distance <= effectiveRadius
         );
         filtered.sort((a, b) =>
           compareSponsoredThen(a, b, (x, y) => (x.distance ?? 0) - (y.distance ?? 0))
@@ -269,11 +320,41 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
         );
       }
 
+      // Last resort: drop text search, then category, so the home screen is rarely empty.
+      if (filtered.length === 0 && query.lat != null && query.lng != null) {
+        if (query.q) {
+          filtered = withDistance
+            .filter((p) => p.distance === null || p.distance <= effectiveRadius)
+            .sort((a, b) => (a.distance ?? 0) - (b.distance ?? 0));
+        }
+        if (filtered.length === 0) {
+          const bb = radiusToBoundingBox(query.lat, query.lng, effectiveRadius);
+          const nearbyAny = await prisma.place.findMany({
+            where: {
+              isActive: true,
+              latitude: { gte: bb.minLat, lte: bb.maxLat },
+              longitude: { gte: bb.minLng, lte: bb.maxLng },
+            },
+          });
+          filtered = nearbyAny
+            .map((place) => ({
+              place,
+              distance:
+                Math.round(
+                  getDistanceKm(query.lat!, query.lng!, place.latitude, place.longitude) *
+                    10
+                ) / 10,
+            }))
+            .filter((p) => p.distance === null || p.distance <= effectiveRadius)
+            .sort((a, b) => (a.distance ?? 0) - (b.distance ?? 0));
+        }
+      }
+
       const results = filtered.map(({ place, distance }) =>
         mapPlaceListItem(place, query.language, distance, false, baseUrl)
       );
 
-      res.json({ places: results });
+      res.json({ places: results, radiusKm: effectiveRadius });
     } catch (err) {
       if (err instanceof z.ZodError) {
         res.status(400).json({ error: err.flatten() });
