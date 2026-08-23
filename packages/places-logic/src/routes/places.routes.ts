@@ -116,6 +116,7 @@ function mapPlaceListItem(
     priceRange: place.priceRange,
     images: baseUrl ? resolvePlaceImageUrls(place.images, baseUrl) : place.images,
     openingHours: place.openingHours as Record<string, string>,
+    isOpen: isPlaceOpenNow(place.openingHours),
     isLocked,
     isSponsored: isSponsoredActive(place),
     latitude: place.latitude,
