@@ -213,9 +213,9 @@ export function botPrompt(step: AiStep, lang: AiLanguage): string {
     he: {
       mood: "שלום! אני הבוט של DateSpot 🌙\nלאן יוצאים הערב?\n\nספר/י לי מה מצב הרוח — רומנטי, כיפי, רגוע, או לחגוג?",
       category: "מעולה! איזה סוג מקום מתאים?\nמסעדה, דייט רומנטי, סושי, שקיעה, אטרקציה, חלבית או בשרית?",
-      budget: "מה התקציב?\nחינם · ₪ · ₪₪ · ₪₪₪",
+      budget: "אחרון! מה התקציב שלכם?\nחינם · ₪ · ₪₪ · ₪₪₪",
       radius: "כמה רחוק מוכנים לנסוע?\n2 / 5 / 10 / 20 ק\"מ",
-      partySize: "כמה אתם? (מספר סועדים)",
+      partySize: "מעולה! כמה אנשים אתם?",
       done: "",
     },
     en: {
@@ -223,7 +223,7 @@ export function botPrompt(step: AiStep, lang: AiLanguage): string {
       category: "Great! What type of place?\nRestaurant, romantic date, sushi, sunset, attraction, dairy or meat?",
       budget: "What's your budget?\nFree · ₪ · ₪₪ · ₪₪₪",
       radius: "How far are you willing to go?\n2 / 5 / 10 / 20 km",
-      partySize: "How many people?",
+      partySize: "Great! How many people are you?",
       done: "",
     },
     ar: {
@@ -231,7 +231,7 @@ export function botPrompt(step: AiStep, lang: AiLanguage): string {
       category: "رائع! أي نوع مكان؟\nمطعم، موعد رومانسي، سوشي، غروب، جاذبية، حليبي أو لحوم؟",
       budget: "ما الميزانية؟\nمجاني · ₪ · ₪₪ · ₪₪₪",
       radius: "كم المسافة المناسبة؟\n2 / 5 / 10 / 20 كم",
-      partySize: "كم عددكم؟",
+      partySize: "رائع! كم عددكم؟",
       done: "",
     },
   };
@@ -529,6 +529,9 @@ export function getQuickReplies(step: AiStep, lang: AiLanguage): string[] {
   if (step === "radius") {
     return ["radius:2", "radius:5", "radius:10", "radius:20"];
   }
+  if (step === "partySize") {
+    return ["party:2", "party:4", "party:6", "party:8"];
+  }
   return [];
 }
 
@@ -551,6 +554,10 @@ export function quickReplyLabel(value: string, lang: AiLanguage): string {
     "radius:5": { he: "5 ק\"מ", en: "5 km", ar: "5 كم" },
     "radius:10": { he: "10 ק\"מ", en: "10 km", ar: "10 كم" },
     "radius:20": { he: "20 ק\"מ", en: "20 km", ar: "20 كم" },
+    "party:2": { he: "2", en: "2", ar: "2" },
+    "party:4": { he: "4", en: "4", ar: "4" },
+    "party:6": { he: "6", en: "6", ar: "6" },
+    "party:8": { he: "8+", en: "8+", ar: "8+" },
   };
   return labels[value]?.[lang] ?? value;
 }

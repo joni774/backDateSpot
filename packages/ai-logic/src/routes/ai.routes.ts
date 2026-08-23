@@ -19,6 +19,7 @@ import {
 import {
   applyQuickModeDefaults,
   botPrompt,
+  botRetry,
   buildRecommendations,
   findRecommendedPlaces,
   formatQuickModeIntro,
@@ -27,7 +28,11 @@ import {
   getIsraelDayKey,
   getQuickReplies,
   hasUnlimitedAi,
+  moodToDefaultCategory,
   noResultsMessage,
+  parseBudget,
+  parseMood,
+  parsePartySize,
   parseQuickMode,
   quotaExceededMessage,
   quickReplyLabel,
@@ -36,6 +41,13 @@ import {
   type AiLanguage,
   type AiStep,
 } from "../recommender";
+
+/** Guided flow order for the chat wizard: mood → party size → budget → search. */
+function nextWizardStep(step: AiStep): AiStep {
+  if (step === "mood") return "partySize";
+  if (step === "partySize") return "budget";
+  return "done";
+}
 
 export interface AiRouterConfig {
   verifyTokenMiddleware: RequestHandler;
@@ -221,7 +233,7 @@ export function createAiRouter(config: AiRouterConfig): Router {
           data: {
             userId,
             language: lang,
-            context: { step: "done", lat: body.lat, lng: body.lng },
+            context: { step: "mood", lat: body.lat, lng: body.lng },
           },
         });
         const welcome = botPrompt("mood", lang);
@@ -254,6 +266,9 @@ export function createAiRouter(config: AiRouterConfig): Router {
       let ctx = parseContext(session.context);
       if (body.lat != null) ctx.lat = body.lat;
       if (body.lng != null) ctx.lng = body.lng;
+      // Old sessions may carry the retired "category"/"radius" wizard steps —
+      // treat them as already past the guided flow.
+      if (ctx.step === "category" || ctx.step === "radius") ctx.step = "done";
 
       await prisma.aiChatMessage.create({
         data: {
@@ -336,6 +351,75 @@ export function createAiRouter(config: AiRouterConfig): Router {
             }
           }
         }
+        step = "done";
+      } else if (ctx.step === "mood" || ctx.step === "partySize" || ctx.step === "budget") {
+        // ── Guided wizard: mood → party size → budget → results ──────────────
+        // Never let the LLM jump straight to place results before all three
+        // slots are filled — that was the source of premature/generic replies.
+        const currentStep = ctx.step;
+        let parsed = false;
+
+        if (currentStep === "mood") {
+          const mood = parseMood(body.message);
+          if (mood) {
+            ctx.mood = mood;
+            ctx.category = moodToDefaultCategory(mood);
+            ctx.step = nextWizardStep(currentStep);
+            parsed = true;
+          }
+        } else if (currentStep === "partySize") {
+          const partySize = parsePartySize(body.message);
+          if (partySize) {
+            ctx.partySize = partySize;
+            ctx.step = nextWizardStep(currentStep);
+            parsed = true;
+          }
+        } else if (currentStep === "budget") {
+          const budget = parseBudget(body.message);
+          if (budget) {
+            ctx.budget = budget;
+            ctx.step = nextWizardStep(currentStep);
+            parsed = true;
+          }
+        }
+
+        if (!parsed) {
+          // Didn't understand the answer — re-ask the same question.
+          assistantContent = botRetry(currentStep, lang);
+          step = currentStep;
+          advanced = false;
+        } else if (ctx.step === "done") {
+          // All three slots filled — now (and only now) search for places.
+          if (!hasUnlimitedAi(user.subscriptionTier)) {
+            const used = await getUsageCount(userId);
+            if (used >= getFreeDailyLimit()) {
+              assistantContent = quotaExceededMessage(lang);
+              quotaExceeded = true;
+            }
+          }
+
+          if (!assistantContent) {
+            ctx.radiusKm = ctx.radiusKm ?? 10;
+            const ranked = await findRecommendedPlaces(findManyPlaces, ctx, lang);
+            recommendations = buildRecommendations(ranked);
+
+            if (!recommendations) {
+              assistantContent = noResultsMessage(lang);
+            } else {
+              assistantContent = formatRecommendationsIntro(lang, ctx.partySize ?? 2);
+              if (!hasUnlimitedAi(user.subscriptionTier)) {
+                await incrementUsage(userId);
+                quotaExceeded =
+                  (await getUsageCount(userId)) >= getFreeDailyLimit();
+              }
+            }
+          }
+          step = "done";
+        } else {
+          // Advance to the next question in the wizard.
+          assistantContent = botPrompt(ctx.step, lang);
+          step = ctx.step;
+        }
       } else if (openai) {
         // ── Layer 2: LLM agent ─────────────────────────────────────────────
         if (!hasUnlimitedAi(user.subscriptionTier)) {
@@ -408,7 +492,6 @@ export function createAiRouter(config: AiRouterConfig): Router {
 
       ctx = {
         ...ctx,
-        step: "done",
         lat: ctx.lat,
         lng: ctx.lng,
       };
@@ -442,7 +525,7 @@ export function createAiRouter(config: AiRouterConfig): Router {
           recommendations,
         },
         step,
-        quickReplies: getQuickReplies("mood", lang).map((v) => ({
+        quickReplies: getQuickReplies(step, lang).map((v) => ({
           value: v,
           label: quickReplyLabel(v, lang),
         })),
