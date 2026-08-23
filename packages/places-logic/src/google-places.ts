@@ -1,4 +1,9 @@
 import { getDistanceKm } from "@datespot/utils";
+import {
+  normalizeGoogleOpeningHours,
+  type GoogleOpeningHours,
+  type OpeningHoursMap,
+} from "./utils/opening-hours";
 
 const GOOGLE_PHOTO_PREFIX = "gpl:";
 /** Reject Google matches that are clearly a different nearby business. */
@@ -22,7 +27,11 @@ type FindPlaceResponse = {
 
 type PlaceDetailsResponse = {
   status: string;
-  result?: { photos?: GooglePhoto[] };
+  result?: {
+    photos?: GooglePhoto[];
+    opening_hours?: GoogleOpeningHours;
+    place_id?: string;
+  };
 };
 
 type NearbySearchResponse = {
@@ -151,6 +160,64 @@ export async function fetchGooglePlacePhotoRefs(
   }
 
   return refs.slice(0, 5);
+}
+
+function isRealGooglePlaceId(placeId: string | null | undefined): boolean {
+  if (!placeId) return false;
+  return !placeId.startsWith("osm:") && !placeId.startsWith("photon:");
+}
+
+/**
+ * Fetch opening hours from Google Place Details for a known place_id.
+ */
+export async function fetchGoogleOpeningHoursByPlaceId(
+  placeId: string,
+  apiKey: string
+): Promise<OpeningHoursMap | null> {
+  const detailsUrl =
+    "https://maps.googleapis.com/maps/api/place/details/json?" +
+    `place_id=${encodeURIComponent(placeId)}&fields=opening_hours&language=he&key=${apiKey}`;
+  const detailsRes = await fetch(detailsUrl);
+  if (!detailsRes.ok) return null;
+  const detailsData = (await detailsRes.json()) as PlaceDetailsResponse;
+  if (detailsData.status !== "OK") return null;
+  return normalizeGoogleOpeningHours(detailsData.result?.opening_hours);
+}
+
+/**
+ * Resolve Google place_id (if needed) then return normalized opening hours.
+ */
+export async function fetchGoogleOpeningHoursForBusiness(options: {
+  apiKey: string;
+  googlePlaceId?: string | null;
+  name: string;
+  altName?: string | null;
+  lat: number;
+  lng: number;
+}): Promise<{ hours: OpeningHoursMap | null; googlePlaceId?: string }> {
+  const { apiKey, name, altName, lat, lng } = options;
+  let placeId = isRealGooglePlaceId(options.googlePlaceId)
+    ? options.googlePlaceId!.trim()
+    : undefined;
+
+  if (!placeId) {
+    const names = [name, altName]
+      .map((value) => value?.trim())
+      .filter((value, index, all): value is string => !!value && all.indexOf(value) === index);
+
+    for (const queryName of names) {
+      const found = await lookupPhotosByName(queryName, lat, lng, apiKey);
+      if (found.placeId) {
+        placeId = found.placeId;
+        break;
+      }
+    }
+  }
+
+  if (!placeId) return { hours: null };
+
+  const hours = await fetchGoogleOpeningHoursByPlaceId(placeId, apiKey);
+  return { hours, googlePlaceId: placeId };
 }
 
 export const googlePlacesSleep = (ms: number) =>

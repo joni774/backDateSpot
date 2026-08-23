@@ -4,11 +4,19 @@ import {
   PriceRange,
 } from "@datespot/database";
 import type { PlacesListCache } from "./cache";
-import { encodeGooglePhotoRef } from "./google-places";
+import {
+  encodeGooglePhotoRef,
+  fetchGoogleOpeningHoursByPlaceId,
+} from "./google-places";
+import {
+  emptyOpeningHours,
+  hasUsableOpeningHours,
+} from "./utils/opening-hours";
 
 const GOOGLE_NEARBY_URL = "https://maps.googleapis.com/maps/api/place/nearbysearch/json";
 const INGEST_TTL_SECONDS = 15 * 60;
 const MAX_GOOGLE_RADIUS_M = 50_000;
+const HOURS_CONCURRENCY = 5;
 const localIngestAt = new Map<string, number>();
 
 type GooglePhoto = { photo_reference: string };
@@ -168,6 +176,7 @@ async function fetchNearby(
 async function upsertGooglePlace(
   result: GoogleNearbyResult,
   language: "he" | "en" | "ar",
+  apiKey: string,
   requestedCategory?: string
 ): Promise<void> {
   const googlePlaceId = result.place_id?.trim();
@@ -182,6 +191,24 @@ async function upsertGooglePlace(
   const images = (result.photos ?? [])
     .slice(0, 3)
     .map((photo) => encodeGooglePhotoRef(photo.photo_reference));
+
+  const existing = await prisma.place.findUnique({
+    where: { googlePlaceId },
+    select: { openingHours: true },
+  });
+
+  let openingHours = emptyOpeningHours();
+  let shouldFetchHours = !hasUsableOpeningHours(existing?.openingHours);
+  if (shouldFetchHours) {
+    try {
+      const fromGoogle = await fetchGoogleOpeningHoursByPlaceId(googlePlaceId, apiKey);
+      if (fromGoogle) openingHours = fromGoogle;
+    } catch (err) {
+      console.warn(`[places] opening hours for ${name}:`, err);
+    }
+  } else {
+    openingHours = existing!.openingHours as typeof openingHours;
+  }
 
   await prisma.place.upsert({
     where: { googlePlaceId },
@@ -199,7 +226,7 @@ async function upsertGooglePlace(
       address,
       priceRange: mapPrice(result.price_level),
       images,
-      openingHours: {},
+      openingHours,
       displayOrder: 500,
     },
     update: {
@@ -211,9 +238,28 @@ async function upsertGooglePlace(
       address,
       priceRange: mapPrice(result.price_level),
       ...(images.length > 0 ? { images } : {}),
+      ...(shouldFetchHours && hasUsableOpeningHours(openingHours)
+        ? { openingHours }
+        : {}),
       isActive: true,
     },
   });
+}
+
+async function mapPool<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>
+): Promise<void> {
+  let index = 0;
+  const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (index < items.length) {
+      const current = items[index++];
+      if (current === undefined) return;
+      await worker(current);
+    }
+  });
+  await Promise.all(runners);
 }
 
 export async function ingestGoogleNearbyPlaces(options: {
@@ -269,8 +315,8 @@ export async function ingestGoogleNearbyPlaces(options: {
     }
   }
 
-  await Promise.allSettled(
-    unique.slice(0, 80).map((result) => upsertGooglePlace(result, language, category))
+  await mapPool(unique.slice(0, 80), HOURS_CONCURRENCY, (result) =>
+    upsertGooglePlace(result, language, apiKey, category)
   );
   await cache.set(ingestKey, "1", INGEST_TTL_SECONDS);
 }

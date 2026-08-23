@@ -19,10 +19,15 @@ import { attachGooglePhotosToPlaces } from "../place-image-sources";
 import { placeMatchesCategory, prismaCategoryFilter } from "../category-filter";
 import {
   buildGooglePhotoFetchUrl,
+  fetchGoogleOpeningHoursForBusiness,
   resolvePlaceImageUrls,
 } from "../google-places";
 import { placeCategorySchema } from "../schemas/place.schema";
-import { isPlaceOpenNow, localizePlace } from "../utils/place.util";
+import {
+  hasUsableOpeningHours,
+  isPlaceOpenNow,
+  localizePlace,
+} from "../utils/place.util";
 
 const listQuerySchema = z.object({
   category: placeCategorySchema.optional(),
@@ -588,6 +593,29 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
         return;
       }
 
+      let openingHours = place.openingHours;
+      if (!hasUsableOpeningHours(openingHours) && config.googlePlacesApiKey) {
+        try {
+          const enriched = await fetchGoogleOpeningHoursForBusiness({
+            apiKey: config.googlePlacesApiKey,
+            googlePlaceId: place.googlePlaceId,
+            name: place.nameHe,
+            altName: place.nameEn,
+            lat: place.latitude,
+            lng: place.longitude,
+          });
+          if (enriched.hours) {
+            openingHours = enriched.hours;
+            await prisma.place.update({
+              where: { id },
+              data: { openingHours: enriched.hours },
+            });
+          }
+        } catch (err) {
+          console.warn(`[places] Google hours enrich failed for ${place.nameHe}:`, err);
+        }
+      }
+
       await prisma.place.update({
         where: { id },
         data: { viewCount: { increment: 1 } },
@@ -628,13 +656,13 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
         address: place.address,
         priceRange: place.priceRange,
         images: resolvePlaceImageUrls(place.images, baseUrl),
-        openingHours: place.openingHours,
+        openingHours,
         phone: place.phone,
         website: place.website,
         deliveryWoltUrl: place.deliveryWoltUrl,
         deliveryTenBisUrl: place.deliveryTenBisUrl,
         deliveryMishlohaUrl: place.deliveryMishlohaUrl,
-        isOpen: isPlaceOpenNow(place.openingHours),
+        isOpen: isPlaceOpenNow(openingHours),
         isSponsored: isSponsoredActive(place),
         isSaved,
         isFavorite,

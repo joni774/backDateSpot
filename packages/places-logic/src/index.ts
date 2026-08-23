@@ -13,6 +13,8 @@ export {
   buildGooglePhotoFetchUrl,
   decodeGooglePhotoRef,
   encodeGooglePhotoRef,
+  fetchGoogleOpeningHoursByPlaceId,
+  fetchGoogleOpeningHoursForBusiness,
   fetchGooglePlacePhotoRefs,
   getGooglePlacesApiKey,
   googlePlacesSleep,
@@ -21,6 +23,8 @@ export {
 export {
   localizePlace,
   isPlaceOpenNow,
+  hasUsableOpeningHours,
+  normalizeGoogleOpeningHours,
   type Language,
 } from "./utils/place.util";
 export {
