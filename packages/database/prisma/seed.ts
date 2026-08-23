@@ -63,8 +63,9 @@ const places = [
     phone: "03-5174777",
     website: "https://www.messa-rest.co.il",
     deliveryWoltUrl: "https://wolt.com/he/isr/tel-aviv",
-    deliveryTenBisUrl: "https://www.tenbis.co.il/",
+    deliveryTenBisUrl: "https://www.10bis.co.il/",
     deliveryMishlohaUrl: "https://www.mishloha.co.il/",
+    leadFeeAgorot: 500,
     displayOrder: 3,
   },
   {

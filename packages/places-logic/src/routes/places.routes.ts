@@ -546,6 +546,7 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
         res.status(400).json({ error: "Place has no website" });
         return;
       }
+      // Delivery leads are always allowed — client may open affiliate or search fallback URLs.
 
       const lead = await prisma.placeLead.create({
         data: {

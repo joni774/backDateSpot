@@ -33,11 +33,14 @@ enum PriceRange {
   EXPENSIVE
 }
 
-// Lead type for business commission tracking (call / WhatsApp / website).
+// Lead type for business commission tracking (call / WhatsApp / website / delivery).
 enum LeadType {
   CALL
   WHATSAPP
   WEBSITE
+  DELIVERY_WOLT
+  DELIVERY_TENBIS
+  DELIVERY_MISHLOHA
 }
 
 // App users: registration, login, subscription tier, admin flag.

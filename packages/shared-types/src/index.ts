@@ -13,7 +13,13 @@ export type PlaceCategory =
 
 export type PriceRange = "FREE" | "BUDGET" | "MODERATE" | "EXPENSIVE";
 
-export type LeadType = "CALL" | "WHATSAPP" | "WEBSITE";
+export type LeadType =
+  | "CALL"
+  | "WHATSAPP"
+  | "WEBSITE"
+  | "DELIVERY_WOLT"
+  | "DELIVERY_TENBIS"
+  | "DELIVERY_MISHLOHA";
 
 export type Language = "he" | "en" | "ar";
 
