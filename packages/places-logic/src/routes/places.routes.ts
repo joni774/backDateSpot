@@ -53,7 +53,7 @@ const listQuerySchema = z
   });
 
 const INGEST_WAIT_MS = 4_000;
-const RADIUS_EXPANSION_KM = [10, 20, 50, 100] as const;
+const RADIUS_EXPANSION_KM = [5, 10, 20, 50, 100] as const;
 
 function expansionRadii(requestedKm: number): number[] {
   const larger = RADIUS_EXPANSION_KM.filter((km) => km > requestedKm);
