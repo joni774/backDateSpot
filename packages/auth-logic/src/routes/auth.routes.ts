@@ -91,9 +91,10 @@ const pushTokenSchema = z.object({
 const purchaseSchema = z.object({
   tier: z.enum(["VIP", "DATING"]),
   receipt: z.string().optional(),
+  /** Full PAN accepted only for backward compatibility; prefer cardLast4. */
   cardNumber: z.string().min(12).max(19).optional(),
+  cardLast4: z.string().regex(/^\d{4}$/).optional(),
   cardExpiry: z.string().regex(/^\d{2}\/\d{2}$/).optional(),
-  cardCvv: z.string().regex(/^\d{3,4}$/).optional(),
   cardHolder: z.string().min(2).optional(),
 });
 
@@ -357,7 +358,8 @@ export function createAuthRouter(config: AuthRouterConfig): Router {
       await prisma.passwordResetToken.create({
         data: { userId: user.id, token, expiresAt },
       });
-      const baseUrl = config.appPublicUrl ?? "datespot://reset-password";
+      // Expo route is `/auth/reset-password` (scheme `datespot://auth/reset-password`).
+      const baseUrl = config.appPublicUrl ?? "datespot://auth/reset-password";
       const resetLink = `${baseUrl}?token=${token}`;
       await sendPasswordResetEmail(user.email, resetLink);
       res.json({ message: "If the email exists, a reset link was sent" });
@@ -558,7 +560,11 @@ export function createAuthRouter(config: AuthRouterConfig): Router {
   router.post("/subscriptions/purchase", verifyTokenMiddleware, async (req, res) => {
     try {
       const body = purchaseSchema.parse(req.body);
-      if (process.env.NODE_ENV === "production" && !body.receipt && !body.cardNumber) {
+      const last4 =
+        body.cardLast4 ??
+        (body.cardNumber ? body.cardNumber.replace(/\s+/g, "").slice(-4) : null);
+
+      if (process.env.NODE_ENV === "production" && !body.receipt && !last4) {
         res.status(400).json({ error: "Payment details required" });
         return;
       }
@@ -569,15 +575,12 @@ export function createAuthRouter(config: AuthRouterConfig): Router {
           res.status(400).json({ error: "Invalid card number" });
           return;
         }
-        if (!body.cardExpiry || !body.cardCvv || !body.cardHolder) {
-          res.status(400).json({ error: "Incomplete card details" });
-          return;
-        }
       }
 
-      const last4 = body.cardNumber
-        ? body.cardNumber.replace(/\s+/g, "").slice(-4)
-        : null;
+      if (last4 && (!body.cardExpiry || !body.cardHolder)) {
+        res.status(400).json({ error: "Incomplete card details" });
+        return;
+      }
 
       const user = await prisma.$transaction(async (tx) => {
         await tx.payment.create({
@@ -586,7 +589,7 @@ export function createAuthRouter(config: AuthRouterConfig): Router {
             tier: body.tier as SubscriptionTier,
             amountAgorot: TIER_PRICES_AGOROT[body.tier],
             currency: "ILS",
-            provider: body.cardNumber ? "card" : "dev-receipt",
+            provider: last4 ? "card" : "dev-receipt",
             status: "succeeded",
             last4,
           },

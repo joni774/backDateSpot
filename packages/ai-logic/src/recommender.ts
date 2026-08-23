@@ -76,8 +76,8 @@ const MOOD_KEYWORDS: Record<string, string[]> = {
 /** Specific food types before generic RESTAURANT so "אוכל סושי" → SUSHI, not RESTAURANT. */
 const CATEGORY_KEYWORDS: Record<PlaceCategory, string[]> = {
   SUSHI: ["סושי", "sushi", "יפני", "japanese"],
-  DAIRY_RESTAURANT: ["חלב", "dairy", "כשר"],
-  MEAT_RESTAURANT: ["בשר", "meat", "steak", "גריל"],
+  DAIRY_RESTAURANT: ["חלבי", "חלב", "dairy", "כשר לחלבי", "חלביות"],
+  MEAT_RESTAURANT: ["בשרי", "בשר", "meat", "steak", "גריל", "בשריות"],
   ROMANTIC_DATE: ["רומנטי", "romantic", "דייט", "date"],
   SUNSET: ["שקיע", "sunset", "נוף", "view"],
   ATTRACTION: ["אטרקצ", "attraction", "בילוי", "activity", "fun"],
@@ -212,7 +212,7 @@ export function botPrompt(step: AiStep, lang: AiLanguage): string {
   const prompts: Record<AiLanguage, Record<AiStep, string>> = {
     he: {
       mood: "שלום! אני הבוט של DateSpot 🌙\nלאן יוצאים הערב?\n\nספר/י לי מה מצב הרוח — רומנטי, כיפי, רגוע, או לחגוג?",
-      category: "מעולה! איזה סוג מקום מתאים?\nמסעדה, דייט רומנטי, סושי, שקיעה, אטרקציה, חלבית או בשרית?",
+      category: "מעולה! מה תרצו לאכול?\nבשרי · חלבי · סושי · או לא משנה?",
       budget: "אחרון! מה התקציב שלכם?\nחינם · ₪ · ₪₪ · ₪₪₪",
       radius: "כמה רחוק מוכנים לנסוע?\n2 / 5 / 10 / 20 ק\"מ",
       partySize: "מעולה! כמה אנשים אתם?",
@@ -220,7 +220,7 @@ export function botPrompt(step: AiStep, lang: AiLanguage): string {
     },
     en: {
       mood: "Hi! I'm the DateSpot bot 🌙\nWhere should you go tonight?\n\nWhat's the vibe — romantic, fun, relaxed, or celebrating?",
-      category: "Great! What type of place?\nRestaurant, romantic date, sushi, sunset, attraction, dairy or meat?",
+      category: "Great! What would you like to eat?\nMeat · Dairy · Sushi · or no preference?",
       budget: "What's your budget?\nFree · ₪ · ₪₪ · ₪₪₪",
       radius: "How far are you willing to go?\n2 / 5 / 10 / 20 km",
       partySize: "Great! How many people are you?",
@@ -228,7 +228,7 @@ export function botPrompt(step: AiStep, lang: AiLanguage): string {
     },
     ar: {
       mood: "مرحباً! أنا بوت DateSpot 🌙\nإلى أين تخرجون الليلة؟\n\nما الأجواء — رومانسي، مرح، هادئ، أم احتفال؟",
-      category: "رائع! أي نوع مكان؟\nمطعم، موعد رومانسي، سوشي، غروب، جاذبية، حليبي أو لحوم؟",
+      category: "رائع! ماذا تريدون أن تأكلوا؟\nلحوم · ألبان · سوشي · أو لا يهم؟",
       budget: "ما الميزانية؟\nمجاني · ₪ · ₪₪ · ₪₪₪",
       radius: "كم المسافة المناسبة؟\n2 / 5 / 10 / 20 كم",
       partySize: "رائع! كم عددكم؟",
@@ -242,7 +242,7 @@ export function botRetry(step: AiStep, lang: AiLanguage): string {
   const retries: Record<AiLanguage, Record<AiStep, string>> = {
     he: {
       mood: "לא הבנתי — נסה/י: רומנטי, כיפי, רגוע, או לחגוג",
-      category: "בחר/י קטגוריה: מסעדה, דייט, סושי, שקיעה, אטרקציה...",
+      category: "בחר/י: בשרי, חלבי, סושי, או לא משנה",
       budget: "בחר/י: חינם, ₪, ₪₪, או ₪₪₪",
       radius: "הקלד/י מספר ק\"מ: 2, 5, 10, או 20",
       partySize: "הקלד/י מספר (למשל 2)",
@@ -250,7 +250,7 @@ export function botRetry(step: AiStep, lang: AiLanguage): string {
     },
     en: {
       mood: "Try: romantic, fun, relaxed, or celebrate",
-      category: "Pick: restaurant, romantic, sushi, sunset, attraction...",
+      category: "Pick: meat, dairy, sushi, or no preference",
       budget: "Pick: free, ₪, ₪₪, or ₪₪₪",
       radius: "Enter km: 2, 5, 10, or 20",
       partySize: "Enter a number (e.g. 2)",
@@ -258,7 +258,7 @@ export function botRetry(step: AiStep, lang: AiLanguage): string {
     },
     ar: {
       mood: "جرّب: رومانسي، مرح، هادئ، أو احتفال",
-      category: "اختر: مطعم، رومانسي، سوشي، غروب...",
+      category: "اختر: لحوم، ألبان، سوشي، أو لا يهم",
       budget: "اختر: مجاني، ₪، ₪₪، ₪₪₪",
       radius: "أدخل كم: 2، 5، 10، 20",
       partySize: "أدخل رقماً (مثلاً 2)",
@@ -516,11 +516,10 @@ export function getQuickReplies(step: AiStep, lang: AiLanguage): string[] {
   }
   if (step === "category") {
     return [
-      "category:RESTAURANT",
-      "category:ROMANTIC_DATE",
+      "category:MEAT_RESTAURANT",
+      "category:DAIRY_RESTAURANT",
       "category:SUSHI",
-      "category:SUNSET",
-      "category:ATTRACTION",
+      "category:RESTAURANT",
     ];
   }
   if (step === "budget") {
@@ -541,9 +540,11 @@ export function quickReplyLabel(value: string, lang: AiLanguage): string {
     "mood:fun": { he: "🎉 כיפי", en: "🎉 Fun", ar: "🎉 مرح" },
     "mood:relaxed": { he: "😌 רגוע", en: "😌 Relaxed", ar: "😌 هادئ" },
     "mood:celebrate": { he: "🥂 לחגוג", en: "🥂 Celebrate", ar: "🥂 احتفال" },
-    "category:RESTAURANT": { he: "🍽 מסעדה", en: "🍽 Restaurant", ar: "🍽 مطعم" },
+    "category:RESTAURANT": { he: "🤷 לא משנה", en: "🤷 No preference", ar: "🤷 لا يهم" },
     "category:ROMANTIC_DATE": { he: "💕 דייט", en: "💕 Date", ar: "💕 موعد" },
     "category:SUSHI": { he: "🍣 סושי", en: "🍣 Sushi", ar: "🍣 سوشي" },
+    "category:DAIRY_RESTAURANT": { he: "🧀 חלבי", en: "🧀 Dairy", ar: "🧀 ألبان" },
+    "category:MEAT_RESTAURANT": { he: "🥩 בשרי", en: "🥩 Meat", ar: "🥩 لحوم" },
     "category:SUNSET": { he: "🌅 שקיעה", en: "🌅 Sunset", ar: "🌅 غروب" },
     "category:ATTRACTION": { he: "🎡 אטרקציה", en: "🎡 Attraction", ar: "🎡 attraction" },
     "budget:FREE": { he: "חינם", en: "Free", ar: "مجاني" },

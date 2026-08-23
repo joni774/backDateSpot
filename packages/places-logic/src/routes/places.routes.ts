@@ -31,7 +31,7 @@ const listQuerySchema = z.object({
   radius: z.coerce
     .number()
     .default(10)
-    .transform((n) => Math.min(50, Math.max(1, Number.isFinite(n) ? n : 10))),
+    .transform((n) => Math.min(200, Math.max(1, Number.isFinite(n) ? n : 10))),
   language: z.enum(["he", "en", "ar"]).default("he"),
   q: z.string().min(1).optional(),
 });

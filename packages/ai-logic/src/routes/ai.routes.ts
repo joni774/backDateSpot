@@ -28,9 +28,9 @@ import {
   getIsraelDayKey,
   getQuickReplies,
   hasUnlimitedAi,
-  moodToDefaultCategory,
   noResultsMessage,
   parseBudget,
+  parseCategory,
   parseMood,
   parsePartySize,
   parseQuickMode,
@@ -42,9 +42,10 @@ import {
   type AiStep,
 } from "../recommender";
 
-/** Guided flow order for the chat wizard: mood → party size → budget → search. */
+/** Guided flow: mood → food type → party size → budget → search. */
 function nextWizardStep(step: AiStep): AiStep {
-  if (step === "mood") return "partySize";
+  if (step === "mood") return "category";
+  if (step === "category") return "partySize";
   if (step === "partySize") return "budget";
   return "done";
 }
@@ -266,9 +267,8 @@ export function createAiRouter(config: AiRouterConfig): Router {
       let ctx = parseContext(session.context);
       if (body.lat != null) ctx.lat = body.lat;
       if (body.lng != null) ctx.lng = body.lng;
-      // Old sessions may carry the retired "category"/"radius" wizard steps —
-      // treat them as already past the guided flow.
-      if (ctx.step === "category" || ctx.step === "radius") ctx.step = "done";
+      // Old sessions may carry the retired "radius" wizard step.
+      if (ctx.step === "radius") ctx.step = "done";
 
       await prisma.aiChatMessage.create({
         data: {
@@ -352,10 +352,13 @@ export function createAiRouter(config: AiRouterConfig): Router {
           }
         }
         step = "done";
-      } else if (ctx.step === "mood" || ctx.step === "partySize" || ctx.step === "budget") {
-        // ── Guided wizard: mood → party size → budget → results ──────────────
-        // Never let the LLM jump straight to place results before all three
-        // slots are filled — that was the source of premature/generic replies.
+      } else if (
+        ctx.step === "mood" ||
+        ctx.step === "category" ||
+        ctx.step === "partySize" ||
+        ctx.step === "budget"
+      ) {
+        // Guided wizard: mood → food (meat/dairy/sushi) → party → budget → results
         const currentStep = ctx.step;
         let parsed = false;
 
@@ -363,7 +366,22 @@ export function createAiRouter(config: AiRouterConfig): Router {
           const mood = parseMood(body.message);
           if (mood) {
             ctx.mood = mood;
-            ctx.category = moodToDefaultCategory(mood);
+            ctx.step = nextWizardStep(currentStep);
+            parsed = true;
+          }
+        } else if (currentStep === "category") {
+          const lower = body.message.trim().toLowerCase();
+          const anyFood = ["לא משנה", "הכל", "any", "doesn't matter", "doesnt matter", "لا يهم"].some(
+            (k) => lower.includes(k.toLowerCase())
+          );
+          const category = parseCategory(body.message);
+          if (anyFood || category === "RESTAURANT") {
+            // "No preference" — don't lock to a food category.
+            ctx.category = undefined;
+            ctx.step = nextWizardStep(currentStep);
+            parsed = true;
+          } else if (category) {
+            ctx.category = category;
             ctx.step = nextWizardStep(currentStep);
             parsed = true;
           }
@@ -389,7 +407,7 @@ export function createAiRouter(config: AiRouterConfig): Router {
           step = currentStep;
           advanced = false;
         } else if (ctx.step === "done") {
-          // All three slots filled — now (and only now) search for places.
+          // All slots filled — now (and only now) search for places.
           if (!hasUnlimitedAi(user.subscriptionTier)) {
             const used = await getUsageCount(userId);
             if (used >= getFreeDailyLimit()) {
