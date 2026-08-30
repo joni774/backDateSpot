@@ -744,6 +744,7 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
         deliveryWoltUrl: place.deliveryWoltUrl,
         deliveryTenBisUrl: place.deliveryTenBisUrl,
         deliveryMishlohaUrl: place.deliveryMishlohaUrl,
+        deliveryCibusUrl: place.deliveryCibusUrl,
         isOpen: isPlaceOpenNow(openingHours),
         isSponsored: isSponsoredActive(place),
         isSaved,

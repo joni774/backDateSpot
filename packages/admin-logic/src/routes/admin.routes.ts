@@ -50,6 +50,7 @@ const placeBodySchema = z.object({
   deliveryWoltUrl: optionalUrl,
   deliveryTenBisUrl: optionalUrl,
   deliveryMishlohaUrl: optionalUrl,
+  deliveryCibusUrl: optionalUrl,
   isActive: z.boolean().optional(),
   displayOrder: z.number().int().optional(),
   leadFeeAgorot: z.number().int().min(0).optional(),

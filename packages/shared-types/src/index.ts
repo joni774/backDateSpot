@@ -19,7 +19,8 @@ export type LeadType =
   | "WEBSITE"
   | "DELIVERY_WOLT"
   | "DELIVERY_TENBIS"
-  | "DELIVERY_MISHLOHA";
+  | "DELIVERY_MISHLOHA"
+  | "DELIVERY_CIBUS";
 
 export type Language = "he" | "en" | "ar";
 
@@ -52,6 +53,7 @@ export interface PlaceDetail extends PlaceListItem {
   deliveryWoltUrl?: string | null;
   deliveryTenBisUrl?: string | null;
   deliveryMishlohaUrl?: string | null;
+  deliveryCibusUrl?: string | null;
   isOpen: boolean;
   isSaved: boolean;
   isFavorite?: boolean;

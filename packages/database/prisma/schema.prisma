@@ -41,6 +41,7 @@ enum LeadType {
   DELIVERY_WOLT
   DELIVERY_TENBIS
   DELIVERY_MISHLOHA
+  DELIVERY_CIBUS
 }
 
 // App users: registration, login, subscription tier, admin flag.
@@ -118,6 +119,7 @@ model Place {
   deliveryWoltUrl     String?
   deliveryTenBisUrl   String?
   deliveryMishlohaUrl String?
+  deliveryCibusUrl    String?
   isActive       Boolean       @default(true)
   displayOrder   Int           @default(0)
   viewCount      Int           @default(0)
