@@ -12,6 +12,7 @@ COPY apps/api/package.json ./apps/api/
 COPY packages/auth-logic/package.json ./packages/auth-logic/
 COPY packages/places-logic/package.json ./packages/places-logic/
 COPY packages/admin-logic/package.json ./packages/admin-logic/
+COPY packages/ai-logic/package.json ./packages/ai-logic/
 COPY packages/database/package.json ./packages/database/
 COPY packages/shared-types/package.json ./packages/shared-types/
 COPY packages/utils/package.json ./packages/utils/
