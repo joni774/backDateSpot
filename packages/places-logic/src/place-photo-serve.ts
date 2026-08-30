@@ -137,6 +137,9 @@ export async function servePlacePhotoByIndex(options: {
 
   await proxyExternalImage(res, categoryStockImage(place)).catch(() => undefined);
   if (!res.headersSent) {
+    await proxyExternalImage(res, fallbackUniqueImage(place.id)).catch(() => undefined);
+  }
+  if (!res.headersSent) {
     res.status(404).json({ error: "Place photo unavailable" });
   }
 }
