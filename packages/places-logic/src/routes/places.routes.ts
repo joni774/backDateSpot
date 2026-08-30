@@ -18,10 +18,11 @@ import { ingestOsmNearbyPlaces } from "../osm-nearby";
 import { attachGooglePhotosToPlaces } from "../place-image-sources";
 import { placeMatchesCategory, prismaCategoryFilter } from "../category-filter";
 import {
-  buildGooglePhotoFetchUrl,
   fetchGoogleOpeningHoursForBusiness,
+  fetchGooglePhotoBuffer,
   resolvePlaceImageUrls,
 } from "../google-places";
+import { servePlacePhotoByIndex } from "../place-photo-serve";
 import { placeCategorySchema } from "../schemas/place.schema";
 import {
   hasUsableOpeningHours,
@@ -147,7 +148,7 @@ function mapPlaceListItem(
     category: place.category,
     distance,
     priceRange: place.priceRange,
-    images: baseUrl ? resolvePlaceImageUrls(place.images, baseUrl) : place.images,
+    images: baseUrl ? resolvePlaceImageUrls(place.images, baseUrl, place.id) : place.images,
     openingHours: place.openingHours as Record<string, string>,
     isOpen: isPlaceOpenNow(place.openingHours),
     isLocked,
@@ -518,23 +519,44 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
         return;
       }
 
-      const photoUrl = buildGooglePhotoFetchUrl(ref, apiKey);
-      const photoRes = await fetch(photoUrl, { redirect: "follow" });
-      if (!photoRes.ok) {
+      const photo = await fetchGooglePhotoBuffer(ref, apiKey);
+      if (!photo) {
         res.status(502).json({ error: "Failed to fetch place photo" });
         return;
       }
 
-      res.set(
-        "Content-Type",
-        photoRes.headers.get("content-type") ?? "image/jpeg"
-      );
-      res.set("Cache-Control", "public, max-age=86400");
-      const buffer = Buffer.from(await photoRes.arrayBuffer());
-      res.send(buffer);
+      res.set("Content-Type", photo.contentType);
+      res.set("Cache-Control", "public, max-age=3600");
+      res.send(photo.buffer);
     } catch (err) {
       if (err instanceof z.ZodError) {
         res.status(400).json({ error: "Invalid photo reference" });
+        return;
+      }
+      console.error(err);
+      res.status(500).json({ error: "Failed to fetch place photo" });
+    }
+  });
+
+  router.get("/:id/photo/:index", async (req, res) => {
+    try {
+      const id = z.string().uuid().parse(req.params.id);
+      const index = Math.max(0, parseInt(String(req.params.index), 10) || 0);
+      const place = await prisma.place.findUnique({ where: { id } });
+      if (!place || !place.isActive) {
+        res.status(404).json({ error: "Place not found" });
+        return;
+      }
+
+      await servePlacePhotoByIndex({
+        res,
+        place,
+        index,
+        apiKey: config.googlePlacesApiKey,
+      });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        res.status(400).json({ error: "Invalid place id" });
         return;
       }
       console.error(err);
@@ -737,7 +759,7 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
         longitude: place.longitude,
         address: place.address,
         priceRange: place.priceRange,
-        images: resolvePlaceImageUrls(place.images, baseUrl),
+        images: resolvePlaceImageUrls(place.images, baseUrl, place.id),
         openingHours,
         phone: place.phone,
         website: place.website,

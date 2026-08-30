@@ -67,8 +67,34 @@ export function decodeGooglePhotoRef(value: string): string | null {
   return null;
 }
 
-export function resolvePlaceImageUrls(images: string[], baseUrl: string): string[] {
+/** True for stable http(s) URLs we can return to clients as-is (not encoded Google refs). */
+export function isDirectImageUrl(url: string): boolean {
+  const trimmed = url.trim();
+  if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) return false;
+  return decodeGooglePhotoRef(trimmed) === null;
+}
+
+/**
+ * Build client-facing image URLs. Google photo refs expire — use place-id proxy URLs
+ * so the server can fetch fresh refs on each request.
+ */
+export function resolvePlaceImageUrls(
+  images: string[],
+  baseUrl: string,
+  placeId?: string
+): string[] {
   const normalizedBase = baseUrl.replace(/\/$/, "");
+  const direct = images.filter(isDirectImageUrl);
+  if (direct.length > 0) return direct;
+
+  if (placeId) {
+    const gplCount = images.filter((img) => decodeGooglePhotoRef(img)).length;
+    const slots = Math.max(gplCount, 1);
+    return Array.from({ length: Math.min(slots, 5) }, (_, index) =>
+      `${normalizedBase}/api/places/${placeId}/photo/${index}`
+    );
+  }
+
   return images.map((image) => {
     const ref = decodeGooglePhotoRef(image);
     if (!ref) return image;
@@ -78,6 +104,19 @@ export function resolvePlaceImageUrls(images: string[], baseUrl: string): string
 
 export function buildGooglePhotoFetchUrl(ref: string, apiKey: string): string {
   return `https://maps.googleapis.com/maps/api/place/photo?maxwidth=800&photo_reference=${encodeURIComponent(ref)}&key=${apiKey}`;
+}
+
+export async function fetchGooglePhotoBuffer(
+  ref: string,
+  apiKey: string
+): Promise<{ buffer: Buffer; contentType: string } | null> {
+  const photoUrl = buildGooglePhotoFetchUrl(ref, apiKey);
+  const photoRes = await fetch(photoUrl, { redirect: "follow" });
+  if (!photoRes.ok) return null;
+  return {
+    buffer: Buffer.from(await photoRes.arrayBuffer()),
+    contentType: photoRes.headers.get("content-type") ?? "image/jpeg",
+  };
 }
 
 function isSameSpot(lat: number, lng: number, location?: GoogleLocation): boolean {
@@ -162,9 +201,24 @@ export async function fetchGooglePlacePhotoRefs(
   return refs.slice(0, 5);
 }
 
-function isRealGooglePlaceId(placeId: string | null | undefined): boolean {
+export function isRealGooglePlaceId(placeId: string | null | undefined): boolean {
   if (!placeId) return false;
   return !placeId.startsWith("osm:") && !placeId.startsWith("photon:");
+}
+
+/** Fetch fresh photo refs from Place Details when googlePlaceId is known. */
+export async function fetchGooglePlacePhotoRefsByPlaceId(
+  googlePlaceId: string,
+  apiKey: string
+): Promise<string[]> {
+  const detailsUrl =
+    "https://maps.googleapis.com/maps/api/place/details/json?" +
+    `place_id=${encodeURIComponent(googlePlaceId)}&fields=photos&key=${apiKey}`;
+  const detailsRes = await fetch(detailsUrl);
+  if (!detailsRes.ok) return [];
+  const detailsData = (await detailsRes.json()) as PlaceDetailsResponse;
+  if (detailsData.status !== "OK" || !detailsData.result?.photos?.length) return [];
+  return detailsData.result.photos.map((photo) => photo.photo_reference).slice(0, 5);
 }
 
 /**

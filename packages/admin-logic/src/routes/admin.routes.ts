@@ -7,7 +7,7 @@ import {
   PriceRange,
   LeadType,
 } from "@datespot/database";
-import { placeCategorySchema, fetchPlaceImages, needsGooglePhoto } from "@datespot/places-logic";
+import { placeCategorySchema, fetchPlaceImages, needsGooglePhoto, stockImageForCategory } from "@datespot/places-logic";
 import { noopAdminCacheHooks, type AdminCacheHooks } from "../cache";
 
 const optionalUrl = z
@@ -372,6 +372,33 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: "Failed to enrich photos" });
+    }
+  });
+
+  router.post("/restore-photos", async (_req, res) => {
+    try {
+      const places = await prisma.place.findMany({ orderBy: { id: "asc" } });
+      const empty = places.filter((place) => place.images.length === 0);
+
+      let restored = 0;
+      for (const place of empty) {
+        await prisma.place.update({
+          where: { id: place.id },
+          data: { images: [stockImageForCategory(place.category)] },
+        });
+        restored += 1;
+      }
+
+      await cache.onPlacesMutated?.();
+
+      res.json({
+        totalPlaces: places.length,
+        emptyBefore: empty.length,
+        restored,
+      });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Failed to restore photos" });
     }
   });
 

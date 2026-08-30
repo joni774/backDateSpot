@@ -427,7 +427,7 @@ export function serializePlace(
       ? getDistanceKm(lat, lng, place.latitude, place.longitude)
       : null;
   const apiBase = (process.env.PUBLIC_API_URL || "http://localhost:3000").replace(/\/$/, "");
-  const imageUrl = resolvePlaceImageUrls(place.images ?? [], apiBase)[0] ?? null;
+  const imageUrl = resolvePlaceImageUrls(place.images ?? [], apiBase, place.id)[0] ?? null;
   return {
     id: place.id,
     name,
