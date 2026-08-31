@@ -1,10 +1,9 @@
 import { prisma, type Place, type PlaceCategory } from "@datespot/database";
 import {
   encodeGooglePhotoRef,
-  fetchGooglePlacePhotoRefs,
-  fetchGooglePlacePhotoRefsByPlaceId,
   getGooglePlacesApiKey,
   isRealGooglePlaceId,
+  resolveGooglePlacePhotos,
 } from "./google-places";
 
 const CATEGORY_SEARCH_TERMS: Record<PlaceCategory, string[]> = {
@@ -212,6 +211,18 @@ export function needsGooglePhoto(images: string[]): boolean {
   return !images.some((url) => url.startsWith("gpl:"));
 }
 
+export type PlaceImageFetchResult = {
+  images: string[];
+  googlePlaceId?: string;
+};
+
+export const FOOD_CATEGORIES = new Set<PlaceCategory>([
+  "RESTAURANT",
+  "SUSHI",
+  "MEAT_RESTAURANT",
+  "DAIRY_RESTAURANT",
+]);
+
 export async function fetchPlaceImages(options: {
   nameHe: string;
   nameEn: string;
@@ -220,50 +231,70 @@ export async function fetchPlaceImages(options: {
   longitude: number;
   address: string;
   googlePlaceId?: string | null;
-}): Promise<string[]> {
+}): Promise<PlaceImageFetchResult> {
   const { nameHe, nameEn, category, latitude, longitude, address, googlePlaceId } = options;
   const googleKey = getGooglePlacesApiKey();
 
   if (googleKey) {
-    let refs: string[] = [];
-    if (isRealGooglePlaceId(googlePlaceId)) {
-      refs = await fetchGooglePlacePhotoRefsByPlaceId(googlePlaceId!, googleKey);
+    const resolved = await resolveGooglePlacePhotos({
+      apiKey: googleKey,
+      nameHe,
+      nameEn,
+      lat: latitude,
+      lng: longitude,
+      googlePlaceId,
+    });
+    if (resolved.refs.length > 0) {
+      return {
+        images: resolved.refs.map(encodeGooglePhotoRef),
+        googlePlaceId: resolved.googlePlaceId,
+      };
     }
-    if (refs.length === 0) {
-      refs = await fetchGooglePlacePhotoRefs(
-        nameHe,
-        latitude,
-        longitude,
-        googleKey,
-        nameEn
-      );
+    if (FOOD_CATEGORIES.has(category)) {
+      return { images: [] };
     }
-    if (refs.length > 0) return refs.map(encodeGooglePhotoRef);
   }
 
   const osmImage = await fetchOsmImageUrl(latitude, longitude);
-  if (osmImage) return [osmImage];
+  if (osmImage) return { images: [osmImage] };
 
   const nominatimImage = await fetchNominatimImageUrl(latitude, longitude);
-  if (nominatimImage) return [nominatimImage];
+  if (nominatimImage) return { images: [nominatimImage] };
 
   const wikidataImage = await fetchWikidataNearbyImage(latitude, longitude);
-  if (wikidataImage) return [wikidataImage];
+  if (wikidataImage) return { images: [wikidataImage] };
 
   for (const query of buildSearchQueries(nameHe, nameEn, category, address)) {
     const wikimediaImage = await fetchWikimediaSearchUrl(query, nameHe, nameEn);
-    if (wikimediaImage) return [wikimediaImage];
+    if (wikimediaImage) return { images: [wikimediaImage] };
   }
 
-  return [];
+  return { images: [] };
 }
 
-const FOOD_CATEGORIES = new Set<PlaceCategory>([
-  "RESTAURANT",
-  "SUSHI",
-  "MEAT_RESTAURANT",
-  "DAIRY_RESTAURANT",
-]);
+/** Persist Google photo refs and optionally link a verified googlePlaceId. */
+export async function persistPlacePhotoCache(options: {
+  placeId: string;
+  images: string[];
+  googlePlaceId?: string;
+}): Promise<void> {
+  const data: { images: string[]; googlePlaceId?: string } = {
+    images: options.images,
+  };
+  if (options.googlePlaceId && isRealGooglePlaceId(options.googlePlaceId)) {
+    data.googlePlaceId = options.googlePlaceId;
+  }
+
+  try {
+    await prisma.place.update({ where: { id: options.placeId }, data });
+  } catch (err) {
+    if (!data.googlePlaceId) throw err;
+    await prisma.place.update({
+      where: { id: options.placeId },
+      data: { images: options.images },
+    });
+  }
+}
 
 /** Fetch Google photos for restaurants still using stock/empty images. Mutates `places`. */
 export async function attachGooglePhotosToPlaces(
@@ -278,7 +309,7 @@ export async function attachGooglePhotosToPlaces(
 
   for (const place of pending) {
     try {
-      const images = await fetchPlaceImages({
+      const fetched = await fetchPlaceImages({
         nameHe: place.nameHe,
         nameEn: place.nameEn,
         category: place.category,
@@ -287,12 +318,13 @@ export async function attachGooglePhotosToPlaces(
         address: place.address,
         googlePlaceId: place.googlePlaceId,
       });
-      if (images.length === 0) continue;
-      await prisma.place.update({
-        where: { id: place.id },
-        data: { images },
+      if (fetched.images.length === 0) continue;
+      await persistPlacePhotoCache({
+        placeId: place.id,
+        images: fetched.images,
+        googlePlaceId: fetched.googlePlaceId,
       });
-      place.images = images;
+      place.images = fetched.images;
     } catch (err) {
       console.warn(`[places] Google photo skipped for ${place.nameHe}:`, err);
     }

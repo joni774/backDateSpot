@@ -11,6 +11,7 @@ import {
   fetchPlaceImages,
   imageFetchSleep,
   needsGooglePhoto,
+  persistPlacePhotoCache,
 } from "../../places-logic/src/place-image-sources";
 import { getGooglePlacesApiKey } from "../../places-logic/src/google-places";
 import { loadEnvFiles } from "./load-env";
@@ -40,7 +41,7 @@ async function main() {
 
   for (const place of toUpdate) {
     try {
-      const images = await fetchPlaceImages({
+      const fetched = await fetchPlaceImages({
         nameHe: place.nameHe,
         nameEn: place.nameEn,
         category: place.category,
@@ -50,16 +51,17 @@ async function main() {
         googlePlaceId: place.googlePlaceId,
       });
 
-      if (images.length === 0) {
+      if (fetched.images.length === 0) {
         skipped += 1;
         console.log(`No Google photo for ${place.nameHe}`);
         await imageFetchSleep(250);
         continue;
       }
 
-      await prisma.place.update({
-        where: { id: place.id },
-        data: { images },
+      await persistPlacePhotoCache({
+        placeId: place.id,
+        images: fetched.images,
+        googlePlaceId: fetched.googlePlaceId,
       });
 
       updated += 1;

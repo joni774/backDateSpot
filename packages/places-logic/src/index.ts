@@ -16,6 +16,7 @@ export {
   fetchGoogleOpeningHoursByPlaceId,
   fetchGoogleOpeningHoursForBusiness,
   fetchGooglePlacePhotoRefs,
+  resolveGooglePlacePhotos,
   getGooglePlacesApiKey,
   googlePlacesSleep,
   resolvePlaceImageUrls,
@@ -31,6 +32,9 @@ export {
   attachGooglePhotosToPlaces,
   needsGooglePhoto,
   fetchPlaceImages,
+  persistPlacePhotoCache,
+  FOOD_CATEGORIES,
+  type PlaceImageFetchResult,
 } from "./place-image-sources";
 export {
   stockImageForCategory,

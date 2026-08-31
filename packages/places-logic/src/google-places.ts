@@ -7,7 +7,7 @@ import {
 
 const GOOGLE_PHOTO_PREFIX = "gpl:";
 /** Reject Google matches that are clearly a different nearby business. */
-const MAX_MATCH_KM = 0.12;
+const MAX_MATCH_KM = 0.08;
 
 type GooglePhoto = { photo_reference: string };
 
@@ -38,6 +38,7 @@ type NearbySearchResponse = {
   status: string;
   results?: Array<{
     place_id?: string;
+    name?: string;
     photos?: GooglePhoto[];
     geometry?: { location?: GoogleLocation };
   }>;
@@ -130,14 +131,48 @@ function isSameSpot(lat: number, lng: number, location?: GoogleLocation): boolea
   return getDistanceKm(lat, lng, location.lat, location.lng) <= MAX_MATCH_KM;
 }
 
+function normalizeBusinessName(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+/** True when a Google result name plausibly matches our place name. */
+export function businessNamesMatch(expected: string, candidate: string): boolean {
+  const a = normalizeBusinessName(expected);
+  const b = normalizeBusinessName(candidate);
+  if (!a || !b) return false;
+  if (a === b || a.includes(b) || b.includes(a)) return true;
+
+  const tokensA = a.split(/\s+/).filter((token) => token.length >= 2);
+  const tokensB = new Set(b.split(/\s+/).filter((token) => token.length >= 2));
+  if (tokensA.length === 0 || tokensB.size === 0) return false;
+
+  const overlap = tokensA.filter((token) => tokensB.has(token)).length;
+  const minLen = Math.min(tokensA.length, tokensB.size);
+  return overlap >= Math.max(1, Math.ceil(minLen / 2));
+}
+
+function matchesAnyExpectedName(
+  candidateName: string | undefined,
+  expectedNames: string[]
+): boolean {
+  if (!candidateName?.trim()) return false;
+  return expectedNames.some((name) => businessNamesMatch(name, candidateName));
+}
+
 async function lookupPhotosByName(
   name: string,
   lat: number,
   lng: number,
-  apiKey: string
+  apiKey: string,
+  expectedNames: string[]
 ): Promise<PhotoLookup> {
   const encodedName = encodeURIComponent(name);
-  const bias = `circle:120@${lat},${lng}`;
+  const bias = `circle:80@${lat},${lng}`;
   const findUrl =
     "https://maps.googleapis.com/maps/api/place/findplacefromtext/json?" +
     `input=${encodedName}&inputtype=textquery&fields=place_id,photos,geometry,name` +
@@ -146,7 +181,12 @@ async function lookupPhotosByName(
   const findRes = await fetch(findUrl);
   const findData = (await findRes.json()) as FindPlaceResponse;
   const candidate = findData.candidates?.[0];
-  if (findData.status === "OK" && candidate?.place_id && isSameSpot(lat, lng, candidate.geometry?.location)) {
+  if (
+    findData.status === "OK" &&
+    candidate?.place_id &&
+    matchesAnyExpectedName(candidate.name, expectedNames) &&
+    isSameSpot(lat, lng, candidate.geometry?.location)
+  ) {
     return {
       placeId: candidate.place_id,
       refs: (candidate.photos ?? []).map((photo) => photo.photo_reference),
@@ -158,8 +198,15 @@ async function lookupPhotosByName(
     `location=${lat},${lng}&radius=80&keyword=${encodedName}&key=${apiKey}`;
   const nearbyRes = await fetch(nearbyUrl);
   const nearbyData = (await nearbyRes.json()) as NearbySearchResponse;
-  const match = nearbyData.results?.[0];
-  if (nearbyData.status === "OK" && match?.place_id && isSameSpot(lat, lng, match.geometry?.location)) {
+
+  for (const match of nearbyData.results ?? []) {
+    if (
+      !match.place_id ||
+      !matchesAnyExpectedName(match.name, expectedNames) ||
+      !isSameSpot(lat, lng, match.geometry?.location)
+    ) {
+      continue;
+    }
     return {
       placeId: match.place_id,
       refs: (match.photos ?? []).map((photo) => photo.photo_reference),
@@ -175,16 +222,17 @@ export async function fetchGooglePlacePhotoRefs(
   lng: number,
   apiKey: string,
   altName?: string
-): Promise<string[]> {
+): Promise<{ placeId?: string; refs: string[] }> {
   const names = [name, altName]
     .map((value) => value?.trim())
     .filter((value, index, all): value is string => !!value && all.indexOf(value) === index);
 
   let placeId: string | undefined;
   let refs: string[] = [];
+  const expectedNames = names;
 
   for (const queryName of names) {
-    const found = await lookupPhotosByName(queryName, lat, lng, apiKey);
+    const found = await lookupPhotosByName(queryName, lat, lng, apiKey, expectedNames);
     if (found.placeId) {
       placeId = found.placeId;
       refs = found.refs;
@@ -204,7 +252,35 @@ export async function fetchGooglePlacePhotoRefs(
     }
   }
 
-  return refs.slice(0, 5);
+  return { placeId, refs: refs.slice(0, 5) };
+}
+
+/** Resolve the Google place_id and photo refs for a business (name-verified). */
+export async function resolveGooglePlacePhotos(options: {
+  apiKey: string;
+  nameHe: string;
+  nameEn?: string | null;
+  lat: number;
+  lng: number;
+  googlePlaceId?: string | null;
+}): Promise<{ googlePlaceId?: string; refs: string[] }> {
+  const { apiKey, nameHe, nameEn, lat, lng, googlePlaceId } = options;
+
+  if (isRealGooglePlaceId(googlePlaceId)) {
+    const refs = await fetchGooglePlacePhotoRefsByPlaceId(googlePlaceId!, apiKey);
+    if (refs.length > 0) {
+      return { googlePlaceId: googlePlaceId!.trim(), refs };
+    }
+  }
+
+  const resolved = await fetchGooglePlacePhotoRefs(
+    nameHe,
+    lat,
+    lng,
+    apiKey,
+    nameEn ?? undefined
+  );
+  return { googlePlaceId: resolved.placeId, refs: resolved.refs };
 }
 
 export function isRealGooglePlaceId(placeId: string | null | undefined): boolean {
@@ -266,7 +342,7 @@ export async function fetchGoogleOpeningHoursForBusiness(options: {
       .filter((value, index, all): value is string => !!value && all.indexOf(value) === index);
 
     for (const queryName of names) {
-      const found = await lookupPhotosByName(queryName, lat, lng, apiKey);
+      const found = await lookupPhotosByName(queryName, lat, lng, apiKey, names);
       if (found.placeId) {
         placeId = found.placeId;
         break;

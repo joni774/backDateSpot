@@ -1,15 +1,19 @@
-import { prisma, type Place, type PlaceCategory } from "@datespot/database";
+import { type Place, type PlaceCategory } from "@datespot/database";
 import type { Response } from "express";
 import {
   encodeGooglePhotoRef,
   fetchGooglePhotoBuffer,
-  fetchGooglePlacePhotoRefs,
-  fetchGooglePlacePhotoRefsByPlaceId,
-  isRealGooglePlaceId,
   decodeGooglePhotoRef,
   isDirectImageUrl,
+  resolveGooglePlacePhotos,
 } from "./google-places";
-import { fetchPlaceImages, fallbackUniqueImage, isGenericPlaceholder } from "./place-image-sources";
+import {
+  fetchPlaceImages,
+  fallbackUniqueImage,
+  FOOD_CATEGORIES,
+  isGenericPlaceholder,
+  persistPlacePhotoCache,
+} from "./place-image-sources";
 
 const CATEGORY_STOCK_IMAGE: Record<PlaceCategory, string> = {
   ROMANTIC_DATE: "https://images.unsplash.com/photo-1501785888041-af3ef285b470?w=800",
@@ -30,18 +34,16 @@ function storedGoogleRefs(place: Place): string[] {
 async function resolveFreshGoogleRefs(
   place: Place,
   apiKey: string
-): Promise<string[]> {
-  if (isRealGooglePlaceId(place.googlePlaceId)) {
-    const byId = await fetchGooglePlacePhotoRefsByPlaceId(place.googlePlaceId!, apiKey);
-    if (byId.length > 0) return byId;
-  }
-  return fetchGooglePlacePhotoRefs(
-    place.nameHe,
-    place.latitude,
-    place.longitude,
+): Promise<{ refs: string[]; googlePlaceId?: string }> {
+  const resolved = await resolveGooglePlacePhotos({
     apiKey,
-    place.nameEn
-  );
+    nameHe: place.nameHe,
+    nameEn: place.nameEn,
+    lat: place.latitude,
+    lng: place.longitude,
+    googlePlaceId: place.googlePlaceId,
+  });
+  return { refs: resolved.refs, googlePlaceId: resolved.googlePlaceId };
 }
 
 async function sendImageBuffer(
@@ -101,6 +103,7 @@ async function serveImageCandidate(
 }
 
 async function serveFallbackImages(res: Response, place: Place): Promise<void> {
+  if (FOOD_CATEGORIES.has(place.category)) return;
   if (await proxyExternalImage(res, categoryStockImage(place))) return;
   await proxyExternalImage(res, fallbackUniqueImage(place.id));
 }
@@ -124,17 +127,16 @@ export async function servePlacePhotoByIndex(options: {
       const storedRef = storedRefs[index] ?? storedRefs[0];
       if (storedRef && (await serveGoogleRef(res, storedRef, apiKey))) return;
 
-      const freshRefs = await resolveFreshGoogleRefs(place, apiKey);
-      const freshRef = freshRefs[index] ?? freshRefs[0];
+      const fresh = await resolveFreshGoogleRefs(place, apiKey);
+      const freshRef = fresh.refs[index] ?? fresh.refs[0];
       if (freshRef && (await serveGoogleRef(res, freshRef, apiKey))) {
-        void prisma.place
-          .update({
-            where: { id: place.id },
-            data: { images: freshRefs.map(encodeGooglePhotoRef) },
-          })
-          .catch((err) => {
-            console.warn(`[places] photo cache update failed for ${place.nameHe}:`, err);
-          });
+        void persistPlacePhotoCache({
+          placeId: place.id,
+          images: fresh.refs.map(encodeGooglePhotoRef),
+          googlePlaceId: fresh.googlePlaceId,
+        }).catch((err) => {
+          console.warn(`[places] photo cache update failed for ${place.nameHe}:`, err);
+        });
         return;
       }
     }
@@ -148,20 +150,24 @@ export async function servePlacePhotoByIndex(options: {
       address: place.address,
       googlePlaceId: place.googlePlaceId,
     });
-    const fetchedCandidate = fetched[index] ?? fetched[0];
+    const fetchedCandidate = fetched.images[index] ?? fetched.images[0];
     if (await serveImageCandidate(res, fetchedCandidate, apiKey)) {
       if (place.images.length === 0 || isGenericPlaceholder(place.images)) {
-        void prisma.place
-          .update({ where: { id: place.id }, data: { images: fetched } })
-          .catch(() => undefined);
+        void persistPlacePhotoCache({
+          placeId: place.id,
+          images: fetched.images,
+          googlePlaceId: fetched.googlePlaceId,
+        }).catch(() => undefined);
       }
       return;
     }
 
-    await serveFallbackImages(res, place);
+    if (!FOOD_CATEGORIES.has(place.category)) {
+      await serveFallbackImages(res, place);
+    }
   } catch (err) {
     console.warn(`[places] photo serve failed for ${place.nameHe}:`, err);
-    if (!res.headersSent) {
+    if (!res.headersSent && !FOOD_CATEGORIES.has(place.category)) {
       await serveFallbackImages(res, place).catch(() => undefined);
     }
   }

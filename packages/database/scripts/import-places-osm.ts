@@ -272,14 +272,14 @@ async function main() {
     let images: string[] = [];
     if (apiKey) {
       try {
-        const refs = await fetchGooglePlacePhotoRefs(
+        const resolved = await fetchGooglePlacePhotoRefs(
           nameHe,
           coords.lat,
           coords.lng,
           apiKey,
           pickEnglishName(tags, nameHe)
         );
-        images = refs.map(encodeGooglePhotoRef);
+        images = resolved.refs.map(encodeGooglePhotoRef);
         await googlePlacesSleep(200);
       } catch (err) {
         console.warn(`Google photo lookup failed for ${nameHe}:`, err);

@@ -7,7 +7,7 @@ import {
   PriceRange,
   LeadType,
 } from "@datespot/database";
-import { placeCategorySchema, fetchPlaceImages, needsGooglePhoto, stockImageForCategory } from "@datespot/places-logic";
+import { placeCategorySchema, fetchPlaceImages, needsGooglePhoto, stockImageForCategory, persistPlacePhotoCache, FOOD_CATEGORIES } from "@datespot/places-logic";
 import { noopAdminCacheHooks, type AdminCacheHooks } from "../cache";
 
 const optionalUrl = z
@@ -327,7 +327,7 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
 
       for (const place of pending) {
         try {
-          const images = await fetchPlaceImages({
+          const fetched = await fetchPlaceImages({
             nameHe: place.nameHe,
             nameEn: place.nameEn,
             category: place.category,
@@ -337,13 +337,17 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
             googlePlaceId: place.googlePlaceId,
           });
 
-          if (images.length === 0) {
+          if (fetched.images.length === 0) {
             skipped += 1;
             details.push({ name: place.nameHe, result: "skipped" });
             continue;
           }
 
-          await prisma.place.update({ where: { id: place.id }, data: { images } });
+          await persistPlacePhotoCache({
+            placeId: place.id,
+            images: fetched.images,
+            googlePlaceId: fetched.googlePlaceId,
+          });
           updated += 1;
           details.push({ name: place.nameHe, result: "updated" });
         } catch (err) {
@@ -389,7 +393,7 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
 
       for (const place of toFix) {
         try {
-          const images = await fetchPlaceImages({
+          const fetched = await fetchPlaceImages({
             nameHe: place.nameHe,
             nameEn: place.nameEn,
             category: place.category,
@@ -399,8 +403,8 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
             googlePlaceId: place.googlePlaceId,
           });
 
-          if (images.length === 0) {
-            if (place.images.length === 0) {
+          if (fetched.images.length === 0) {
+            if (place.images.length === 0 && !FOOD_CATEGORIES.has(place.category)) {
               await prisma.place.update({
                 where: { id: place.id },
                 data: { images: [stockImageForCategory(place.category)] },
@@ -412,7 +416,11 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
             continue;
           }
 
-          await prisma.place.update({ where: { id: place.id }, data: { images } });
+          await persistPlacePhotoCache({
+            placeId: place.id,
+            images: fetched.images,
+            googlePlaceId: fetched.googlePlaceId,
+          });
           googleUpdated += 1;
         } catch (err) {
           console.warn(`[admin] restore-photos failed for ${place.nameHe}:`, err);

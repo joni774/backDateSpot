@@ -8,9 +8,11 @@
 import { PrismaClient } from "@prisma/client";
 import {
   fetchPlaceImages,
+  FOOD_CATEGORIES,
   imageFetchSleep,
   isGenericPlaceholder,
   needsGooglePhoto,
+  persistPlacePhotoCache,
 } from "../../places-logic/src/place-image-sources";
 import { getGooglePlacesApiKey } from "../../places-logic/src/google-places";
 import { stockImageForCategory } from "../../places-logic/src/place-photo-serve";
@@ -42,7 +44,7 @@ async function main() {
 
   for (const place of toFix) {
     try {
-      const images = await fetchPlaceImages({
+      const fetched = await fetchPlaceImages({
         nameHe: place.nameHe,
         nameEn: place.nameEn,
         category: place.category,
@@ -52,8 +54,8 @@ async function main() {
         googlePlaceId: place.googlePlaceId,
       });
 
-      if (images.length === 0) {
-        if (place.images.length === 0) {
+      if (fetched.images.length === 0) {
+        if (place.images.length === 0 && !FOOD_CATEGORIES.has(place.category)) {
           await prisma.place.update({
             where: { id: place.id },
             data: { images: [stockImageForCategory(place.category)] },
@@ -66,9 +68,10 @@ async function main() {
         continue;
       }
 
-      await prisma.place.update({
-        where: { id: place.id },
-        data: { images },
+      await persistPlacePhotoCache({
+        placeId: place.id,
+        images: fetched.images,
+        googlePlaceId: fetched.googlePlaceId,
       });
       updated += 1;
       console.log(`Google photo → ${place.nameHe}`);
