@@ -9,7 +9,7 @@ import {
   decodeGooglePhotoRef,
   isDirectImageUrl,
 } from "./google-places";
-import { fetchPlaceImages, fallbackUniqueImage } from "./place-image-sources";
+import { fetchPlaceImages, fallbackUniqueImage, isGenericPlaceholder } from "./place-image-sources";
 
 const CATEGORY_STOCK_IMAGE: Record<PlaceCategory, string> = {
   ROMANTIC_DATE: "https://images.unsplash.com/photo-1501785888041-af3ef285b470?w=800",
@@ -81,6 +81,7 @@ export async function servePlacePhotoByIndex(options: {
   apiKey?: string;
 }): Promise<void> {
   const { res, place, index, apiKey } = options;
+
   const direct = place.images.filter(isDirectImageUrl);
   const directUrl = direct[index] ?? direct[0];
   if (directUrl) {
@@ -127,7 +128,7 @@ export async function servePlacePhotoByIndex(options: {
   });
   const fetchedUrl = fetched[index] ?? fetched[0];
   if (fetchedUrl && (await proxyExternalImage(res, fetchedUrl))) {
-    if (place.images.length === 0) {
+    if (place.images.length === 0 || isGenericPlaceholder(place.images)) {
       void prisma.place
         .update({ where: { id: place.id }, data: { images: fetched } })
         .catch(() => undefined);

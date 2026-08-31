@@ -206,6 +206,7 @@ export function isGenericPlaceholder(images: string[]): boolean {
 
 /** True when the place still has no Google photo of that business. */
 export function needsGooglePhoto(images: string[]): boolean {
+  if (isGenericPlaceholder(images)) return true;
   return !images.some((url) => url.startsWith("gpl:"));
 }
 

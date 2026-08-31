@@ -378,23 +378,54 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
   router.post("/restore-photos", async (_req, res) => {
     try {
       const places = await prisma.place.findMany({ orderBy: { id: "asc" } });
-      const empty = places.filter((place) => place.images.length === 0);
+      const toFix = places.filter(
+        (place) => place.images.length === 0 || needsGooglePhoto(place.images)
+      );
 
-      let restored = 0;
-      for (const place of empty) {
-        await prisma.place.update({
-          where: { id: place.id },
-          data: { images: [stockImageForCategory(place.category)] },
-        });
-        restored += 1;
+      let googleUpdated = 0;
+      let stockFallback = 0;
+      let skipped = 0;
+
+      for (const place of toFix) {
+        try {
+          const images = await fetchPlaceImages({
+            nameHe: place.nameHe,
+            nameEn: place.nameEn,
+            category: place.category,
+            latitude: place.latitude,
+            longitude: place.longitude,
+            address: place.address,
+          });
+
+          if (images.length === 0) {
+            if (place.images.length === 0) {
+              await prisma.place.update({
+                where: { id: place.id },
+                data: { images: [stockImageForCategory(place.category)] },
+              });
+              stockFallback += 1;
+            } else {
+              skipped += 1;
+            }
+            continue;
+          }
+
+          await prisma.place.update({ where: { id: place.id }, data: { images } });
+          googleUpdated += 1;
+        } catch (err) {
+          console.warn(`[admin] restore-photos failed for ${place.nameHe}:`, err);
+          skipped += 1;
+        }
       }
 
       await cache.onPlacesMutated?.();
 
       res.json({
         totalPlaces: places.length,
-        emptyBefore: empty.length,
-        restored,
+        needingFix: toFix.length,
+        googleUpdated,
+        stockFallback,
+        skipped,
       });
     } catch (err) {
       console.error(err);

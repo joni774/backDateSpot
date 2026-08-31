@@ -67,11 +67,17 @@ export function decodeGooglePhotoRef(value: string): string | null {
   return null;
 }
 
-/** True for stable http(s) URLs we can return to clients as-is (not encoded Google refs). */
+/** True for stock/placeholder URLs — not photos of the actual business. */
+export function isGenericStockUrl(url: string): boolean {
+  return url.includes("images.unsplash.com") || url.includes("picsum.photos");
+}
+
+/** True for stable http(s) URLs we can return to clients as-is (not encoded Google refs or stock). */
 export function isDirectImageUrl(url: string): boolean {
   const trimmed = url.trim();
   if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) return false;
-  return decodeGooglePhotoRef(trimmed) === null;
+  if (decodeGooglePhotoRef(trimmed)) return false;
+  return !isGenericStockUrl(trimmed);
 }
 
 /**
