@@ -47,6 +47,7 @@ async function main() {
         latitude: place.latitude,
         longitude: place.longitude,
         address: place.address,
+        googlePlaceId: place.googlePlaceId,
       });
 
       if (images.length === 0) {

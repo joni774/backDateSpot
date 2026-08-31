@@ -334,6 +334,7 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
             latitude: place.latitude,
             longitude: place.longitude,
             address: place.address,
+            googlePlaceId: place.googlePlaceId,
           });
 
           if (images.length === 0) {
@@ -395,6 +396,7 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
             latitude: place.latitude,
             longitude: place.longitude,
             address: place.address,
+            googlePlaceId: place.googlePlaceId,
           });
 
           if (images.length === 0) {

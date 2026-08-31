@@ -125,6 +125,7 @@ export async function servePlacePhotoByIndex(options: {
     latitude: place.latitude,
     longitude: place.longitude,
     address: place.address,
+    googlePlaceId: place.googlePlaceId,
   });
   const fetchedUrl = fetched[index] ?? fetched[0];
   if (fetchedUrl && (await proxyExternalImage(res, fetchedUrl))) {

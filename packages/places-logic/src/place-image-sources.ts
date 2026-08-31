@@ -2,7 +2,9 @@ import { prisma, type Place, type PlaceCategory } from "@datespot/database";
 import {
   encodeGooglePhotoRef,
   fetchGooglePlacePhotoRefs,
+  fetchGooglePlacePhotoRefsByPlaceId,
   getGooglePlacesApiKey,
+  isRealGooglePlaceId,
 } from "./google-places";
 
 const CATEGORY_SEARCH_TERMS: Record<PlaceCategory, string[]> = {
@@ -217,20 +219,26 @@ export async function fetchPlaceImages(options: {
   latitude: number;
   longitude: number;
   address: string;
+  googlePlaceId?: string | null;
 }): Promise<string[]> {
-  const { nameHe, nameEn, category, latitude, longitude, address } = options;
+  const { nameHe, nameEn, category, latitude, longitude, address, googlePlaceId } = options;
   const googleKey = getGooglePlacesApiKey();
 
   if (googleKey) {
-    const refs = await fetchGooglePlacePhotoRefs(
-      nameHe,
-      latitude,
-      longitude,
-      googleKey,
-      nameEn
-    );
+    let refs: string[] = [];
+    if (isRealGooglePlaceId(googlePlaceId)) {
+      refs = await fetchGooglePlacePhotoRefsByPlaceId(googlePlaceId!, googleKey);
+    }
+    if (refs.length === 0) {
+      refs = await fetchGooglePlacePhotoRefs(
+        nameHe,
+        latitude,
+        longitude,
+        googleKey,
+        nameEn
+      );
+    }
     if (refs.length > 0) return refs.map(encodeGooglePhotoRef);
-    return [];
   }
 
   const osmImage = await fetchOsmImageUrl(latitude, longitude);
@@ -270,15 +278,16 @@ export async function attachGooglePhotosToPlaces(
 
   for (const place of pending) {
     try {
-      const refs = await fetchGooglePlacePhotoRefs(
-        place.nameHe,
-        place.latitude,
-        place.longitude,
-        apiKey,
-        place.nameEn
-      );
-      if (refs.length === 0) continue;
-      const images = refs.map(encodeGooglePhotoRef);
+      const images = await fetchPlaceImages({
+        nameHe: place.nameHe,
+        nameEn: place.nameEn,
+        category: place.category,
+        latitude: place.latitude,
+        longitude: place.longitude,
+        address: place.address,
+        googlePlaceId: place.googlePlaceId,
+      });
+      if (images.length === 0) continue;
       await prisma.place.update({
         where: { id: place.id },
         data: { images },
