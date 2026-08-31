@@ -554,6 +554,9 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
         index,
         apiKey: config.googlePlacesApiKey,
       });
+      if (!res.headersSent) {
+        res.status(404).json({ error: "Place photo unavailable" });
+      }
     } catch (err) {
       if (err instanceof z.ZodError) {
         res.status(400).json({ error: "Invalid place id" });

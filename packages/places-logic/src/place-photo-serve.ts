@@ -73,6 +73,38 @@ function categoryStockImage(place: Place): string {
   return CATEGORY_STOCK_IMAGE[place.category] ?? fallbackUniqueImage(place.id);
 }
 
+async function serveGoogleRef(
+  res: Response,
+  ref: string,
+  apiKey: string
+): Promise<boolean> {
+  const photo = await fetchGooglePhotoBuffer(ref, apiKey);
+  if (!photo) return false;
+  await sendImageBuffer(res, photo.buffer, photo.contentType);
+  return true;
+}
+
+async function serveImageCandidate(
+  res: Response,
+  candidate: string | undefined,
+  apiKey?: string
+): Promise<boolean> {
+  if (!candidate) return false;
+  const gplRef = decodeGooglePhotoRef(candidate);
+  if (gplRef && apiKey) {
+    return serveGoogleRef(res, gplRef, apiKey);
+  }
+  if (isDirectImageUrl(candidate)) {
+    return proxyExternalImage(res, candidate);
+  }
+  return false;
+}
+
+async function serveFallbackImages(res: Response, place: Place): Promise<void> {
+  if (await proxyExternalImage(res, categoryStockImage(place))) return;
+  await proxyExternalImage(res, fallbackUniqueImage(place.id));
+}
+
 /** Serve a place photo by index, refreshing expired Google refs when needed. */
 export async function servePlacePhotoByIndex(options: {
   res: Response;
@@ -82,28 +114,19 @@ export async function servePlacePhotoByIndex(options: {
 }): Promise<void> {
   const { res, place, index, apiKey } = options;
 
-  const direct = place.images.filter(isDirectImageUrl);
-  const directUrl = direct[index] ?? direct[0];
-  if (directUrl) {
-    if (await proxyExternalImage(res, directUrl)) return;
-  }
+  try {
+    const direct = place.images.filter(isDirectImageUrl);
+    const directUrl = direct[index] ?? direct[0];
+    if (await serveImageCandidate(res, directUrl, apiKey)) return;
 
-  const storedRefs = storedGoogleRefs(place);
-  if (apiKey) {
-    const storedRef = storedRefs[index] ?? storedRefs[0];
-    if (storedRef) {
-      const cached = await fetchGooglePhotoBuffer(storedRef, apiKey);
-      if (cached) {
-        await sendImageBuffer(res, cached.buffer, cached.contentType);
-        return;
-      }
-    }
+    const storedRefs = storedGoogleRefs(place);
+    if (apiKey) {
+      const storedRef = storedRefs[index] ?? storedRefs[0];
+      if (storedRef && (await serveGoogleRef(res, storedRef, apiKey))) return;
 
-    const freshRefs = await resolveFreshGoogleRefs(place, apiKey);
-    const freshRef = freshRefs[index] ?? freshRefs[0];
-    if (freshRef) {
-      const fresh = await fetchGooglePhotoBuffer(freshRef, apiKey);
-      if (fresh) {
+      const freshRefs = await resolveFreshGoogleRefs(place, apiKey);
+      const freshRef = freshRefs[index] ?? freshRefs[0];
+      if (freshRef && (await serveGoogleRef(res, freshRef, apiKey))) {
         void prisma.place
           .update({
             where: { id: place.id },
@@ -112,35 +135,37 @@ export async function servePlacePhotoByIndex(options: {
           .catch((err) => {
             console.warn(`[places] photo cache update failed for ${place.nameHe}:`, err);
           });
-        await sendImageBuffer(res, fresh.buffer, fresh.contentType);
         return;
       }
     }
-  }
 
-  const fetched = await fetchPlaceImages({
-    nameHe: place.nameHe,
-    nameEn: place.nameEn,
-    category: place.category,
-    latitude: place.latitude,
-    longitude: place.longitude,
-    address: place.address,
-    googlePlaceId: place.googlePlaceId,
-  });
-  const fetchedUrl = fetched[index] ?? fetched[0];
-  if (fetchedUrl && (await proxyExternalImage(res, fetchedUrl))) {
-    if (place.images.length === 0 || isGenericPlaceholder(place.images)) {
-      void prisma.place
-        .update({ where: { id: place.id }, data: { images: fetched } })
-        .catch(() => undefined);
+    const fetched = await fetchPlaceImages({
+      nameHe: place.nameHe,
+      nameEn: place.nameEn,
+      category: place.category,
+      latitude: place.latitude,
+      longitude: place.longitude,
+      address: place.address,
+      googlePlaceId: place.googlePlaceId,
+    });
+    const fetchedCandidate = fetched[index] ?? fetched[0];
+    if (await serveImageCandidate(res, fetchedCandidate, apiKey)) {
+      if (place.images.length === 0 || isGenericPlaceholder(place.images)) {
+        void prisma.place
+          .update({ where: { id: place.id }, data: { images: fetched } })
+          .catch(() => undefined);
+      }
+      return;
     }
-    return;
+
+    await serveFallbackImages(res, place);
+  } catch (err) {
+    console.warn(`[places] photo serve failed for ${place.nameHe}:`, err);
+    if (!res.headersSent) {
+      await serveFallbackImages(res, place).catch(() => undefined);
+    }
   }
 
-  await proxyExternalImage(res, categoryStockImage(place)).catch(() => undefined);
-  if (!res.headersSent) {
-    await proxyExternalImage(res, fallbackUniqueImage(place.id)).catch(() => undefined);
-  }
   if (!res.headersSent) {
     res.status(404).json({ error: "Place photo unavailable" });
   }
