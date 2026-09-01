@@ -7,7 +7,10 @@ import {
 
 const GOOGLE_PHOTO_PREFIX = "gpl:";
 /** Reject Google matches that are clearly a different nearby business. */
-const MAX_MATCH_KM = 0.08;
+const MAX_MATCH_KM = 0.15;
+/** Within this distance, accept a partial name match (OSM coords are often offset). */
+const TIGHT_MATCH_KM = 0.04;
+const SEARCH_RADIUS_M = 150;
 
 type GooglePhoto = { photo_reference: string };
 
@@ -42,6 +45,23 @@ type NearbySearchResponse = {
     photos?: GooglePhoto[];
     geometry?: { location?: GoogleLocation };
   }>;
+};
+
+type TextSearchResponse = {
+  status: string;
+  results?: Array<{
+    place_id?: string;
+    name?: string;
+    photos?: GooglePhoto[];
+    geometry?: { location?: GoogleLocation };
+  }>;
+};
+
+type PhotoCandidate = {
+  placeId: string;
+  name?: string;
+  refs: string[];
+  location?: GoogleLocation;
 };
 
 type PhotoLookup = {
@@ -126,10 +146,6 @@ export async function fetchGooglePhotoBuffer(
   };
 }
 
-function isSameSpot(lat: number, lng: number, location?: GoogleLocation): boolean {
-  if (location?.lat == null || location?.lng == null) return true;
-  return getDistanceKm(lat, lng, location.lat, location.lng) <= MAX_MATCH_KM;
-}
 
 function normalizeBusinessName(value: string): string {
   return value
@@ -164,6 +180,86 @@ function matchesAnyExpectedName(
   return expectedNames.some((name) => businessNamesMatch(name, candidateName));
 }
 
+function distanceKmFrom(lat: number, lng: number, location?: GoogleLocation): number {
+  if (location?.lat == null || location?.lng == null) return 0;
+  return getDistanceKm(lat, lng, location.lat, location.lng);
+}
+
+/** Accept very close POIs when the normalized name overlaps partially. */
+function matchesByProximityAndPartialName(
+  candidateName: string | undefined,
+  expectedNames: string[],
+  distanceKm: number
+): boolean {
+  if (distanceKm > TIGHT_MATCH_KM) return false;
+  const candidate = normalizeBusinessName(candidateName ?? "");
+  if (!candidate) return false;
+
+  return expectedNames.some((expected) => {
+    const norm = normalizeBusinessName(expected);
+    if (norm.length < 3) return false;
+    return candidate.includes(norm) || (candidate.length >= 3 && norm.includes(candidate));
+  });
+}
+
+function scorePhotoCandidate(
+  candidate: PhotoCandidate,
+  expectedNames: string[],
+  lat: number,
+  lng: number
+): number {
+  const distanceKm = distanceKmFrom(lat, lng, candidate.location);
+  if (distanceKm > MAX_MATCH_KM) return -1;
+
+  if (matchesAnyExpectedName(candidate.name, expectedNames)) {
+    return 100 - distanceKm * 100;
+  }
+
+  if (matchesByProximityAndPartialName(candidate.name, expectedNames, distanceKm)) {
+    return 50 - distanceKm * 100;
+  }
+
+  return -1;
+}
+
+function pickBestPhotoCandidate(
+  candidates: PhotoCandidate[],
+  expectedNames: string[],
+  lat: number,
+  lng: number
+): PhotoLookup {
+  let best: { score: number; candidate: PhotoCandidate } | undefined;
+
+  for (const candidate of candidates) {
+    const score = scorePhotoCandidate(candidate, expectedNames, lat, lng);
+    if (score < 0) continue;
+    if (!best || score > best.score) {
+      best = { score, candidate };
+    }
+  }
+
+  if (!best) return { refs: [] };
+  return {
+    placeId: best.candidate.placeId,
+    refs: best.candidate.refs,
+  };
+}
+
+function toPhotoCandidate(match: {
+  place_id?: string;
+  name?: string;
+  photos?: GooglePhoto[];
+  geometry?: { location?: GoogleLocation };
+}): PhotoCandidate | null {
+  if (!match.place_id) return null;
+  return {
+    placeId: match.place_id,
+    name: match.name,
+    refs: (match.photos ?? []).map((photo) => photo.photo_reference),
+    location: match.geometry?.location,
+  };
+}
+
 async function lookupPhotosByName(
   name: string,
   lat: number,
@@ -172,46 +268,49 @@ async function lookupPhotosByName(
   expectedNames: string[]
 ): Promise<PhotoLookup> {
   const encodedName = encodeURIComponent(name);
-  const bias = `circle:80@${lat},${lng}`;
+  const bias = `circle:${SEARCH_RADIUS_M}@${lat},${lng}`;
+  const candidates: PhotoCandidate[] = [];
+
   const findUrl =
     "https://maps.googleapis.com/maps/api/place/findplacefromtext/json?" +
     `input=${encodedName}&inputtype=textquery&fields=place_id,photos,geometry,name` +
     `&locationbias=${encodeURIComponent(bias)}&key=${apiKey}`;
-
-  const findRes = await fetch(findUrl);
-  const findData = (await findRes.json()) as FindPlaceResponse;
-  const candidate = findData.candidates?.[0];
-  if (
-    findData.status === "OK" &&
-    candidate?.place_id &&
-    matchesAnyExpectedName(candidate.name, expectedNames) &&
-    isSameSpot(lat, lng, candidate.geometry?.location)
-  ) {
-    return {
-      placeId: candidate.place_id,
-      refs: (candidate.photos ?? []).map((photo) => photo.photo_reference),
-    };
+  const findData = (await (await fetch(findUrl)).json()) as FindPlaceResponse;
+  const findCandidate = toPhotoCandidate(findData.candidates?.[0] ?? {});
+  if (findData.status === "OK" && findCandidate) {
+    candidates.push(findCandidate);
   }
 
   const nearbyUrl =
     "https://maps.googleapis.com/maps/api/place/nearbysearch/json?" +
-    `location=${lat},${lng}&radius=80&keyword=${encodedName}&key=${apiKey}`;
-  const nearbyRes = await fetch(nearbyUrl);
-  const nearbyData = (await nearbyRes.json()) as NearbySearchResponse;
-
+    `location=${lat},${lng}&radius=${SEARCH_RADIUS_M}&keyword=${encodedName}&key=${apiKey}`;
+  const nearbyData = (await (await fetch(nearbyUrl)).json()) as NearbySearchResponse;
   for (const match of nearbyData.results ?? []) {
-    if (
-      !match.place_id ||
-      !matchesAnyExpectedName(match.name, expectedNames) ||
-      !isSameSpot(lat, lng, match.geometry?.location)
-    ) {
-      continue;
-    }
-    return {
-      placeId: match.place_id,
-      refs: (match.photos ?? []).map((photo) => photo.photo_reference),
-    };
+    const candidate = toPhotoCandidate(match);
+    if (candidate) candidates.push(candidate);
   }
+
+  const textUrl =
+    "https://maps.googleapis.com/maps/api/place/textsearch/json?" +
+    `query=${encodedName}&location=${lat},${lng}&radius=${SEARCH_RADIUS_M}&key=${apiKey}`;
+  const textData = (await (await fetch(textUrl)).json()) as TextSearchResponse;
+  for (const match of textData.results ?? []) {
+    const candidate = toPhotoCandidate(match);
+    if (candidate) candidates.push(candidate);
+  }
+
+  const nearbyFoodUrl =
+    "https://maps.googleapis.com/maps/api/place/nearbysearch/json?" +
+    `location=${lat},${lng}&radius=${SEARCH_RADIUS_M}&type=restaurant&key=${apiKey}`;
+  const nearbyFoodData = (await (await fetch(nearbyFoodUrl)).json()) as NearbySearchResponse;
+  for (const match of nearbyFoodData.results ?? []) {
+    const candidate = toPhotoCandidate(match);
+    if (candidate) candidates.push(candidate);
+  }
+
+  const deduped = [...new Map(candidates.map((item) => [item.placeId, item])).values()];
+  const best = pickBestPhotoCandidate(deduped, expectedNames, lat, lng);
+  if (best.placeId) return best;
 
   return { refs: [] };
 }
