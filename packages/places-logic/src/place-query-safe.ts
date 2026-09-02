@@ -81,8 +81,14 @@ function mapRawPlaceRow(row: Record<string, unknown>): Place | null {
 }
 
 async function loadPlacesViaRaw(where: PlaceWhere, orderByDisplay = false): Promise<Place[]> {
-  const conditions: string[] = ['"isActive" = true'];
+  const conditions: string[] = [];
   const params: unknown[] = [];
+
+  if (where.isActive === false) {
+    conditions.push('"isActive" = false');
+  } else {
+    conditions.push('"isActive" = true');
+  }
 
   if (where.latitude && where.longitude) {
     params.push(where.latitude.gte);
@@ -115,37 +121,34 @@ async function loadPlacesViaRaw(where: PlaceWhere, orderByDisplay = false): Prom
     .filter((place): place is Place => place != null);
 }
 
-/** Load places; fall back to raw SQL when Prisma cannot deserialize rows. */
+/** Load places via raw SQL (avoids Prisma enum deserialization failures on legacy rows). */
 export async function findPlacesSafe(options?: {
   where?: PlaceWhere;
   orderBy?: { displayOrder?: "asc" | "desc" } | { id?: "asc" | "desc" };
 }): Promise<Place[]> {
   const where: PlaceWhere = options?.where ?? { isActive: true };
-
-  try {
-    return await prisma.place.findMany({
-      where,
-      orderBy: options?.orderBy,
-    });
-  } catch (err) {
-    console.warn("[places] findMany failed — using raw SQL fallback:", err);
-    return loadPlacesViaRaw(
-      where,
-      Boolean(options?.orderBy && "displayOrder" in options.orderBy)
-    );
-  }
+  return loadPlacesViaRaw(
+    where,
+    Boolean(options?.orderBy && "displayOrder" in options.orderBy)
+  );
 }
 
 export async function findPlaceByIdSafe(id: string): Promise<Place | null> {
   try {
-    return await prisma.place.findUnique({ where: { id } });
-  } catch (err) {
-    console.warn(`[places] findUnique failed for ${id} — using raw SQL fallback:`, err);
     const rows = await prisma.$queryRawUnsafe<Record<string, unknown>[]>(
       `SELECT * FROM "Place" WHERE "id" = $1 LIMIT 1`,
       id
     );
     const mapped = rows.map((row) => mapRawPlaceRow(row)).filter(Boolean);
-    return mapped[0] ?? null;
+    if (mapped[0]) return mapped[0];
+  } catch (err) {
+    console.warn(`[places] raw lookup failed for ${id}:`, err);
+  }
+
+  try {
+    return await prisma.place.findUnique({ where: { id } });
+  } catch (err) {
+    console.warn(`[places] findUnique failed for ${id}:`, err);
+    return null;
   }
 }

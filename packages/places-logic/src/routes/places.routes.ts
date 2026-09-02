@@ -352,9 +352,14 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
         }
       }
 
-      const results = filtered.map(({ place, distance }) =>
-        mapPlaceListItem(place, query.language, distance, false, baseUrl)
-      );
+      const results: ReturnType<typeof mapPlaceListItem>[] = [];
+      for (const { place, distance } of filtered) {
+        try {
+          results.push(mapPlaceListItem(place, query.language, distance, false, baseUrl));
+        } catch (err) {
+          console.warn(`[places] skip list item ${place.id}:`, err);
+        }
+      }
 
       res.json({ places: results, radiusKm: effectiveRadius });
     } catch (err) {
