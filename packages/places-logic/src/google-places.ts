@@ -7,10 +7,14 @@ import {
 
 const GOOGLE_PHOTO_PREFIX = "gpl:";
 /** Reject Google matches that are clearly a different nearby business. */
-const MAX_MATCH_KM = 0.3;
+const MAX_MATCH_KM = 0.35;
 /** Within this distance, accept a partial name match (OSM coords are often offset). */
-const TIGHT_MATCH_KM = 0.08;
-const SEARCH_RADIUS_M = 150;
+const TIGHT_MATCH_KM = 0.1;
+const SEARCH_RADIUS_M = 250;
+/** Minimum fuzzy name score (0–40) to accept a nearby POI for OSM-imported rows. */
+const MIN_FUZZY_SCORE = 22;
+
+const NEARBY_FOOD_TYPES = ["restaurant", "cafe", "bar", "bakery", "meal_takeaway"] as const;
 
 type GooglePhoto = { photo_reference: string };
 
@@ -156,6 +160,105 @@ function normalizeBusinessName(value: string): string {
     .trim();
 }
 
+/** Strip common Hebrew/English venue prefixes OSM rows often include. */
+export function stripBusinessNameNoise(name: string): string {
+  let value = name.trim();
+  const prefixes = [
+    /^מסעד[תה]\s+/u,
+    /^בית\s+קפה\s+/u,
+    /^בית\s+קafe\s+/iu,
+    /^קafe\s+/iu,
+    /^restaurant\s+/iu,
+    /^cafe\s+/iu,
+    /^bar\s+/iu,
+    /^pub\s+/iu,
+    /^pizzeria\s+/iu,
+    /^פיצרי[הה]\s+/u,
+    /^סushi\s+/iu,
+    /^סושי\s+/u,
+    /^burger\s+/iu,
+    /^בургר\s+/u,
+  ];
+  for (const prefix of prefixes) {
+    value = value.replace(prefix, "");
+  }
+  value = value.replace(/\([^)]*\)/g, " ").replace(/\[[^\]]*\]/g, " ");
+  return value.replace(/\s+/g, " ").trim();
+}
+
+/** Build deduped name/address variants for Google text & nearby search. */
+export function expandExpectedNames(
+  nameHe: string,
+  nameEn?: string | null,
+  address?: string | null
+): string[] {
+  const variants = new Set<string>();
+  const he = nameHe.trim();
+  const en = nameEn?.trim() ?? "";
+  const strippedHe = stripBusinessNameNoise(he);
+  const strippedEn = stripBusinessNameNoise(en);
+
+  for (const value of [he, en, strippedHe, strippedEn]) {
+    if (value.length >= 2) variants.add(value);
+  }
+
+  for (const raw of [he, en, strippedHe, strippedEn]) {
+    const tokens = normalizeBusinessName(raw)
+      .split(/\s+/)
+      .filter((token) => token.length >= 3);
+    if (tokens[0]) variants.add(tokens[0]);
+    if (tokens.length >= 2) variants.add(tokens.slice(0, 2).join(" "));
+  }
+
+  const city =
+    address
+      ?.split(",")
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .pop() ?? address?.split(/\s+/).pop();
+  if (city && city.length >= 2) {
+    if (strippedHe) variants.add(`${strippedHe} ${city}`);
+    if (he) variants.add(`${he} ${city}`);
+    if (strippedEn) variants.add(`${strippedEn} ${city}`);
+  }
+
+  return [...variants];
+}
+
+function fuzzyNameScore(expectedNames: string[], candidateName: string | undefined): number {
+  if (!candidateName?.trim()) return 0;
+  const candidate = normalizeBusinessName(candidateName);
+  const candidateTokens = candidate.split(/\s+/).filter((token) => token.length >= 2);
+  if (candidateTokens.length === 0) return 0;
+
+  let best = 0;
+  const candidateTokenSet = new Set(candidateTokens);
+
+  for (const expected of expectedNames) {
+    const variants = [expected, stripBusinessNameNoise(expected)];
+    for (const raw of variants) {
+      const norm = normalizeBusinessName(raw);
+      if (!norm) continue;
+      if (candidate === norm) best = Math.max(best, 40);
+      if (candidate.includes(norm) || norm.includes(candidate)) best = Math.max(best, 35);
+
+      const expectedTokens = norm.split(/\s+/).filter((token) => token.length >= 2);
+      const overlap = expectedTokens.filter((token) => candidateTokenSet.has(token)).length;
+      const minLen = Math.min(expectedTokens.length, candidateTokens.length);
+      if (minLen > 0 && overlap > 0) {
+        best = Math.max(best, (overlap / minLen) * 32);
+      }
+      for (const token of expectedTokens) {
+        if (token.length >= 4 && candidateTokenSet.has(token)) {
+          best = Math.max(best, 26);
+        }
+      }
+    }
+  }
+
+  return best;
+}
+
 /** True when a Google result name plausibly matches our place name. */
 export function businessNamesMatch(expected: string, candidate: string): boolean {
   const a = normalizeBusinessName(expected);
@@ -219,6 +322,11 @@ function scorePhotoCandidate(
     return 50 - distanceKm * 100;
   }
 
+  const fuzzy = fuzzyNameScore(expectedNames, candidate.name);
+  if (fuzzy >= MIN_FUZZY_SCORE) {
+    return fuzzy - distanceKm * 80;
+  }
+
   return -1;
 }
 
@@ -238,31 +346,44 @@ function pickBestPhotoCandidate(
     }
   }
 
-  if (!best) {
-    const veryClose = candidates.filter(
-      (candidate) =>
-        candidate.refs.length > 0 &&
-        distanceKmFrom(lat, lng, candidate.location) <= TIGHT_MATCH_KM
-    );
-    if (veryClose.length === 1) {
-      return {
-        placeId: veryClose[0].placeId,
-        refs: veryClose[0].refs,
-      };
-    }
-    const withPhotos = candidates.filter((candidate) => candidate.refs.length > 0);
-    if (withPhotos.length === 1 && distanceKmFrom(lat, lng, withPhotos[0].location) <= MAX_MATCH_KM) {
-      return {
-        placeId: withPhotos[0].placeId,
-        refs: withPhotos[0].refs,
-      };
-    }
-    return { refs: [] };
+  if (best && best.score >= MIN_FUZZY_SCORE) {
+    return {
+      placeId: best.candidate.placeId,
+      refs: best.candidate.refs,
+    };
   }
-  return {
-    placeId: best.candidate.placeId,
-    refs: best.candidate.refs,
-  };
+
+  const nearbyScored = candidates
+    .map((candidate) => ({
+      candidate,
+      distanceKm: distanceKmFrom(lat, lng, candidate.location),
+      fuzzy: fuzzyNameScore(expectedNames, candidate.name),
+    }))
+    .filter(
+      (entry) =>
+        entry.distanceKm <= TIGHT_MATCH_KM &&
+        entry.fuzzy >= MIN_FUZZY_SCORE
+    )
+    .sort((a, b) => b.fuzzy - a.fuzzy - (a.distanceKm - b.distanceKm) * 10);
+
+  if (nearbyScored[0]) {
+    return {
+      placeId: nearbyScored[0].candidate.placeId,
+      refs: nearbyScored[0].candidate.refs,
+    };
+  }
+
+  const veryClose = candidates.filter(
+    (candidate) => distanceKmFrom(lat, lng, candidate.location) <= TIGHT_MATCH_KM
+  );
+  if (veryClose.length === 1) {
+    return {
+      placeId: veryClose[0].placeId,
+      refs: veryClose[0].refs,
+    };
+  }
+
+  return { refs: [] };
 }
 
 function toPhotoCandidate(match: {
@@ -289,22 +410,28 @@ async function lookupPhotosByName(
   address?: string
 ): Promise<PhotoLookup> {
   const trimmedAddress = address?.trim();
-  const searchQueries = [name, trimmedAddress ? `${name} ${trimmedAddress}` : undefined].filter(
-    (value, index, all): value is string => !!value && all.indexOf(value) === index
-  );
+  const searchQueries = [
+    name,
+    ...expectedNames,
+    trimmedAddress ? `${name} ${trimmedAddress}` : undefined,
+    trimmedAddress ? `${stripBusinessNameNoise(name)} ${trimmedAddress}` : undefined,
+  ].filter((value, index, all): value is string => !!value && all.indexOf(value) === index);
+
   const bias = `circle:${SEARCH_RADIUS_M}@${lat},${lng}`;
   const candidates: PhotoCandidate[] = [];
 
-  for (const query of searchQueries) {
+  for (const query of searchQueries.slice(0, 8)) {
     const encodedQuery = encodeURIComponent(query);
     const findUrl =
       "https://maps.googleapis.com/maps/api/place/findplacefromtext/json?" +
       `input=${encodedQuery}&inputtype=textquery&fields=place_id,photos,geometry,name` +
       `&locationbias=${encodeURIComponent(bias)}&key=${apiKey}`;
     const findData = (await (await fetch(findUrl)).json()) as FindPlaceResponse;
-    const findCandidate = toPhotoCandidate(findData.candidates?.[0] ?? {});
-    if (findData.status === "OK" && findCandidate) {
-      candidates.push(findCandidate);
+    for (const match of findData.candidates ?? []) {
+      const findCandidate = toPhotoCandidate(match);
+      if (findData.status === "OK" && findCandidate) {
+        candidates.push(findCandidate);
+      }
     }
 
     const textUrl =
@@ -317,30 +444,39 @@ async function lookupPhotosByName(
     }
   }
 
-  const encodedName = encodeURIComponent(name);
-  const nearbyUrl =
-    "https://maps.googleapis.com/maps/api/place/nearbysearch/json?" +
-    `location=${lat},${lng}&radius=${SEARCH_RADIUS_M}&keyword=${encodedName}&key=${apiKey}`;
-  const nearbyData = (await (await fetch(nearbyUrl)).json()) as NearbySearchResponse;
-  for (const match of nearbyData.results ?? []) {
-    const candidate = toPhotoCandidate(match);
-    if (candidate) candidates.push(candidate);
+  for (const query of searchQueries.slice(0, 4)) {
+    const encodedName = encodeURIComponent(query);
+    const nearbyUrl =
+      "https://maps.googleapis.com/maps/api/place/nearbysearch/json?" +
+      `location=${lat},${lng}&radius=${SEARCH_RADIUS_M}&keyword=${encodedName}&key=${apiKey}`;
+    const nearbyData = (await (await fetch(nearbyUrl)).json()) as NearbySearchResponse;
+    for (const match of nearbyData.results ?? []) {
+      const candidate = toPhotoCandidate(match);
+      if (candidate) candidates.push(candidate);
+    }
   }
 
-  const nearbyFoodUrl =
-    "https://maps.googleapis.com/maps/api/place/nearbysearch/json?" +
-    `location=${lat},${lng}&radius=${SEARCH_RADIUS_M}&type=restaurant&key=${apiKey}`;
-  const nearbyFoodData = (await (await fetch(nearbyFoodUrl)).json()) as NearbySearchResponse;
-  for (const match of nearbyFoodData.results ?? []) {
-    const candidate = toPhotoCandidate(match);
-    if (candidate) candidates.push(candidate);
+  for (const nearbyType of NEARBY_FOOD_TYPES) {
+    const nearbyFoodUrl =
+      "https://maps.googleapis.com/maps/api/place/nearbysearch/json?" +
+      `location=${lat},${lng}&radius=${SEARCH_RADIUS_M}&type=${nearbyType}&key=${apiKey}`;
+    const nearbyFoodData = (await (await fetch(nearbyFoodUrl)).json()) as NearbySearchResponse;
+    for (const match of nearbyFoodData.results ?? []) {
+      const candidate = toPhotoCandidate(match);
+      if (candidate) candidates.push(candidate);
+    }
   }
 
   const deduped = [...new Map(candidates.map((item) => [item.placeId, item])).values()];
   const best = pickBestPhotoCandidate(deduped, expectedNames, lat, lng);
-  if (best.placeId) return best;
+  if (!best.placeId) return { refs: [] };
 
-  return { refs: [] };
+  let refs = best.refs;
+  if (refs.length === 0) {
+    refs = await fetchGooglePlacePhotoRefsByPlaceId(best.placeId, apiKey);
+  }
+
+  return { placeId: best.placeId, refs };
 }
 
 export async function fetchGooglePlacePhotoRefs(
@@ -351,15 +487,13 @@ export async function fetchGooglePlacePhotoRefs(
   altName?: string,
   address?: string
 ): Promise<{ placeId?: string; refs: string[] }> {
-  const names = [name, altName]
-    .map((value) => value?.trim())
-    .filter((value, index, all): value is string => !!value && all.indexOf(value) === index);
+  const expectedNames = expandExpectedNames(name, altName, address);
+  const queryNames = expectedNames.length > 0 ? expectedNames : [name];
 
   let placeId: string | undefined;
   let refs: string[] = [];
-  const expectedNames = names;
 
-  for (const queryName of names) {
+  for (const queryName of queryNames) {
     const found = await lookupPhotosByName(
       queryName,
       lat,
@@ -371,20 +505,13 @@ export async function fetchGooglePlacePhotoRefs(
     if (found.placeId) {
       placeId = found.placeId;
       refs = found.refs;
-      if (refs.length > 0) break;
+      break;
     }
   }
 
   if (placeId && refs.length < 3) {
-    const detailsUrl =
-      "https://maps.googleapis.com/maps/api/place/details/json?" +
-      `place_id=${placeId}&fields=photos&key=${apiKey}`;
-    const detailsRes = await fetch(detailsUrl);
-    const detailsData = (await detailsRes.json()) as PlaceDetailsResponse;
-
-    if (detailsData.status === "OK" && detailsData.result?.photos?.length) {
-      refs = detailsData.result.photos.map((photo) => photo.photo_reference);
-    }
+    const detailRefs = await fetchGooglePlacePhotoRefsByPlaceId(placeId, apiKey);
+    if (detailRefs.length > 0) refs = detailRefs;
   }
 
   return { placeId, refs: refs.slice(0, 5) };
@@ -475,12 +602,11 @@ export async function fetchGoogleOpeningHoursForBusiness(options: {
     : undefined;
 
   if (!placeId) {
-    const names = [name, altName]
-      .map((value) => value?.trim())
-      .filter((value, index, all): value is string => !!value && all.indexOf(value) === index);
+    const expectedNames = expandExpectedNames(name, altName, undefined);
+    const queryNames = expectedNames.length > 0 ? expectedNames : [name];
 
-    for (const queryName of names) {
-      const found = await lookupPhotosByName(queryName, lat, lng, apiKey, names);
+    for (const queryName of queryNames) {
+      const found = await lookupPhotosByName(queryName, lat, lng, apiKey, expectedNames);
       if (found.placeId) {
         placeId = found.placeId;
         break;
