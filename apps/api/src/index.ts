@@ -53,6 +53,15 @@ app.get("/health", async (_req, res) => {
       process.env.GIT_COMMIT?.slice(0, 7) ??
       "dev",
     placesQueryOk,
+    cloudinaryConfigured: Boolean(
+      process.env.CLOUDINARY_CLOUD_NAME?.trim() &&
+        process.env.CLOUDINARY_API_KEY?.trim() &&
+        process.env.CLOUDINARY_API_SECRET?.trim()
+    ),
+    googlePlacesKeyConfigured: Boolean(
+      process.env.GOOGLE_PLACES_API_KEY?.trim() ||
+        process.env.GOOGLE_MAPS_API_KEY?.trim()
+    ),
   });
 });
 
