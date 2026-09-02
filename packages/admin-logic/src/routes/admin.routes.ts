@@ -9,6 +9,7 @@ import {
 } from "@datespot/database";
 import { placeCategorySchema, fetchPlaceImages, needsGooglePhoto, stockImageForCategory, persistPlacePhotoCache, FOOD_CATEGORIES } from "@datespot/places-logic";
 import { noopAdminCacheHooks, type AdminCacheHooks } from "../cache";
+import { createLeadBillingProcessor } from "../utils/lead-billing.util";
 
 const optionalUrl = z
   .string()
@@ -54,6 +55,15 @@ const placeBodySchema = z.object({
   isActive: z.boolean().optional(),
   displayOrder: z.number().int().optional(),
   leadFeeAgorot: z.number().int().min(0).optional(),
+  billingEmail: z
+    .union([z.string().email(), z.literal(""), z.null()])
+    .optional()
+    .transform((v) => {
+      if (v === undefined) return undefined;
+      if (!v || !String(v).trim()) return null;
+      return String(v).trim();
+    }),
+  leadBillingEnabled: z.boolean().optional(),
   sponsoredUntil: optionalDateTime,
   sponsoredPriority: z.number().int().optional(),
 });
@@ -64,11 +74,15 @@ export interface AdminRouterConfig {
   verifyTokenMiddleware: RequestHandler;
   requireAdmin: RequestHandler;
   cache?: AdminCacheHooks;
+  stripeSecretKey?: string;
 }
 
 export function createAdminRouter(config: AdminRouterConfig): Router {
   const router = Router();
   const cache = config.cache ?? noopAdminCacheHooks;
+  const leadBilling = createLeadBillingProcessor({
+    stripeSecretKey: config.stripeSecretKey,
+  });
 
   router.use(config.verifyTokenMiddleware);
   router.use(config.requireAdmin);
@@ -78,7 +92,7 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
       const weekAgo = new Date();
       weekAgo.setDate(weekAgo.getDate() - 7);
 
-      const [totalUsers, weeklyActiveUsers, premiumUsers, vipUsers, totalPlaces, totalLeads, weeklyLeads, leadFeeSum] =
+      const [totalUsers, weeklyActiveUsers, premiumUsers, vipUsers, totalPlaces, totalLeads, weeklyLeads, leadFeeSum, unbilledLeadStats] =
         await Promise.all([
           prisma.user.count(),
           prisma.user.count({ where: { lastLoginAt: { gte: weekAgo } } }),
@@ -90,6 +104,11 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
           prisma.placeLead.count(),
           prisma.placeLead.count({ where: { createdAt: { gte: weekAgo } } }),
           prisma.placeLead.aggregate({ _sum: { feeAgorot: true } }),
+          prisma.placeLead.aggregate({
+            where: { leadInvoiceId: null, feeAgorot: { gt: 0 } },
+            _sum: { feeAgorot: true },
+            _count: true,
+          }),
         ]);
 
       const categoryCounts = await Promise.all(
@@ -115,6 +134,9 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
         totalLeads,
         weeklyLeads,
         leadRevenueAgorot: leadFeeSum._sum.feeAgorot ?? 0,
+        unbilledLeads: unbilledLeadStats._count,
+        unbilledRevenueAgorot: unbilledLeadStats._sum.feeAgorot ?? 0,
+        stripeBillingConfigured: leadBilling.isStripeConfigured,
       });
     } catch (err) {
       console.error(err);
@@ -507,6 +529,87 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
       }
       console.error(err);
       res.status(500).json({ error: "Failed to fetch leads" });
+    }
+  });
+
+  router.get("/leads/invoices", async (req, res) => {
+    try {
+      const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10));
+      const limit = Math.min(
+        100,
+        Math.max(1, parseInt(String(req.query.limit ?? "20"), 10))
+      );
+      const skip = (page - 1) * limit;
+      const placeId =
+        typeof req.query.placeId === "string" && req.query.placeId
+          ? z.string().uuid().parse(req.query.placeId)
+          : undefined;
+
+      const where = placeId ? { placeId } : {};
+
+      const [invoices, total] = await Promise.all([
+        prisma.leadInvoice.findMany({
+          where,
+          skip,
+          take: limit,
+          orderBy: { createdAt: "desc" },
+          include: {
+            place: { select: { id: true, nameHe: true, nameEn: true } },
+          },
+        }),
+        prisma.leadInvoice.count({ where }),
+      ]);
+
+      res.json({
+        invoices: invoices.map((invoice) => ({
+          id: invoice.id,
+          placeId: invoice.placeId,
+          placeNameHe: invoice.place.nameHe,
+          placeNameEn: invoice.place.nameEn,
+          stripeInvoiceId: invoice.stripeInvoiceId,
+          status: invoice.status,
+          totalAgorot: invoice.totalAgorot,
+          leadCount: invoice.leadCount,
+          periodStart: invoice.periodStart.toISOString(),
+          periodEnd: invoice.periodEnd.toISOString(),
+          createdAt: invoice.createdAt.toISOString(),
+        })),
+        total,
+        page,
+        totalPages: Math.ceil(total / limit) || 1,
+      });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        res.status(400).json({ error: err.flatten() });
+        return;
+      }
+      console.error(err);
+      res.status(500).json({ error: "Failed to fetch lead invoices" });
+    }
+  });
+
+  router.post("/leads/invoice", async (req, res) => {
+    try {
+      const body = z
+        .object({
+          placeId: z.string().uuid().optional(),
+          sendEmail: z.boolean().optional(),
+        })
+        .parse(req.body ?? {});
+
+      const result = await leadBilling.invoiceUnbilledLeads({
+        placeId: body.placeId,
+        sendEmail: body.sendEmail,
+      });
+
+      res.status(result.created.length > 0 ? 201 : 200).json(result);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        res.status(400).json({ error: err.flatten() });
+        return;
+      }
+      console.error(err);
+      res.status(500).json({ error: "Failed to create lead invoices" });
     }
   });
 

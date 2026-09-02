@@ -11,6 +11,8 @@ import {
   serializeAuthUser,
 } from "../utils/auth.helpers";
 import { createEmailSender } from "../utils/email.util";
+import { createSmsSender } from "../utils/sms.util";
+import { createPaymentProcessor } from "../utils/payments.util";
 import { createVerifyTokenMiddleware } from "../middleware/auth.middleware";
 
 const registerSchema = z
@@ -91,7 +93,9 @@ const pushTokenSchema = z.object({
 const purchaseSchema = z.object({
   tier: z.enum(["VIP", "DATING"]),
   receipt: z.string().optional(),
-  /** Full PAN accepted only for backward compatibility; prefer cardLast4. */
+  /** Stripe PaymentMethod id, created client-side via @stripe/stripe-react-native. Preferred over raw card fields. */
+  stripePaymentMethodId: z.string().optional(),
+  /** Full PAN accepted only for backward compatibility; prefer cardLast4/stripePaymentMethodId. */
   cardNumber: z.string().min(12).max(19).optional(),
   cardLast4: z.string().regex(/^\d{4}$/).optional(),
   cardExpiry: z.string().regex(/^\d{2}\/\d{2}$/).optional(),
@@ -107,6 +111,10 @@ export interface AuthRouterConfig {
   jwtSecret: string;
   sendgridApiKey?: string;
   sendgridFromEmail?: string;
+  twilioAccountSid?: string;
+  twilioAuthToken?: string;
+  twilioFromNumber?: string;
+  stripeSecretKey?: string;
   loginLimiter?: RequestHandler;
   appPublicUrl?: string;
 }
@@ -129,6 +137,12 @@ export function createAuthRouter(config: AuthRouterConfig): Router {
     sendgridApiKey: config.sendgridApiKey,
     sendgridFromEmail: config.sendgridFromEmail,
   });
+  const { sendOtpSms } = createSmsSender({
+    twilioAccountSid: config.twilioAccountSid,
+    twilioAuthToken: config.twilioAuthToken,
+    twilioFromNumber: config.twilioFromNumber,
+  });
+  const { chargeCard } = createPaymentProcessor({ stripeSecretKey: config.stripeSecretKey });
   const verifyTokenMiddleware = createVerifyTokenMiddleware(jwtUtils.verifyAccessToken);
 
   async function loginSuccess(user: Awaited<ReturnType<typeof prisma.user.findUnique>> & object, res: import("express").Response) {
@@ -417,7 +431,16 @@ export function createAuthRouter(config: AuthRouterConfig): Router {
           expiresAt,
         },
       });
-      console.log(`[DateSpot OTP] phone=${body.phone} code=${code}`);
+      try {
+        await sendOtpSms(body.phone, code);
+      } catch (smsErr) {
+        console.error("OTP SMS delivery failed:", smsErr);
+        if (process.env.NODE_ENV === "production") {
+          res.status(500).json({ error: "OTP send failed" });
+          return;
+        }
+        // Dev/staging without SMS provider: fall through and expose devCode below.
+      }
       res.json({ message: "OTP sent", devCode: process.env.NODE_ENV !== "production" ? code : undefined });
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -564,7 +587,12 @@ export function createAuthRouter(config: AuthRouterConfig): Router {
         body.cardLast4 ??
         (body.cardNumber ? body.cardNumber.replace(/\s+/g, "").slice(-4) : null);
 
-      if (process.env.NODE_ENV === "production" && !body.receipt && !last4) {
+      if (
+        process.env.NODE_ENV === "production" &&
+        !body.receipt &&
+        !body.stripePaymentMethodId &&
+        !last4
+      ) {
         res.status(400).json({ error: "Payment details required" });
         return;
       }
@@ -577,8 +605,30 @@ export function createAuthRouter(config: AuthRouterConfig): Router {
         }
       }
 
-      if (last4 && (!body.cardExpiry || !body.cardHolder)) {
+      if (!body.stripePaymentMethodId && last4 && (!body.cardExpiry || !body.cardHolder)) {
         res.status(400).json({ error: "Incomplete card details" });
+        return;
+      }
+
+      const requestUser = await prisma.user.findUniqueOrThrow({ where: { id: req.user!.userId } });
+      const amountAgorot = TIER_PRICES_AGOROT[body.tier];
+
+      let chargeResult;
+      try {
+        chargeResult = await chargeCard({
+          amountAgorot,
+          currency: "ILS",
+          paymentMethodId: body.stripePaymentMethodId,
+          customerEmail: requestUser.email,
+        });
+      } catch (chargeErr) {
+        console.error("Stripe charge failed:", chargeErr);
+        res.status(402).json({ error: "Payment declined" });
+        return;
+      }
+
+      if (chargeResult.status !== "succeeded") {
+        res.status(402).json({ error: "Payment not completed", status: chargeResult.status });
         return;
       }
 
@@ -587,11 +637,11 @@ export function createAuthRouter(config: AuthRouterConfig): Router {
           data: {
             userId: req.user!.userId,
             tier: body.tier as SubscriptionTier,
-            amountAgorot: TIER_PRICES_AGOROT[body.tier],
+            amountAgorot,
             currency: "ILS",
-            provider: last4 ? "card" : "dev-receipt",
+            provider: chargeResult!.provider === "stripe" ? "stripe" : last4 ? "card" : "dev-receipt",
             status: "succeeded",
-            last4,
+            last4: chargeResult!.last4 ?? last4,
           },
         });
         return tx.user.update({

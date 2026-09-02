@@ -14,6 +14,11 @@ const envSchema = z.object({
     .default("*")
     .describe("Origins for web clients (optional). Comma-separated; * in dev."),
   SENDGRID_API_KEY: z.string().optional(),
+  SENDGRID_FROM_EMAIL: z.string().email().optional(),
+  TWILIO_ACCOUNT_SID: z.string().optional(),
+  TWILIO_AUTH_TOKEN: z.string().optional(),
+  TWILIO_FROM_NUMBER: z.string().optional(),
+  STRIPE_SECRET_KEY: z.string().optional(),
   REDIS_URL: z.string().optional(),
   GOOGLE_PLACES_API_KEY: z.string().optional(),
   GOOGLE_MAPS_API_KEY: z.string().optional(),
