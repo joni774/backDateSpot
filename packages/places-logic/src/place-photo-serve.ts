@@ -42,6 +42,7 @@ async function resolveFreshGoogleRefs(
     lat: place.latitude,
     lng: place.longitude,
     googlePlaceId: place.googlePlaceId,
+    address: place.address,
   });
   return { refs: resolved.refs, googlePlaceId: resolved.googlePlaceId };
 }

@@ -238,7 +238,18 @@ function pickBestPhotoCandidate(
     }
   }
 
-  if (!best) return { refs: [] };
+  if (!best) {
+    const veryClose = candidates.filter(
+      (candidate) => distanceKmFrom(lat, lng, candidate.location) <= TIGHT_MATCH_KM
+    );
+    if (veryClose.length === 1) {
+      return {
+        placeId: veryClose[0].placeId,
+        refs: veryClose[0].refs,
+      };
+    }
+    return { refs: [] };
+  }
   return {
     placeId: best.candidate.placeId,
     refs: best.candidate.refs,
@@ -265,36 +276,44 @@ async function lookupPhotosByName(
   lat: number,
   lng: number,
   apiKey: string,
-  expectedNames: string[]
+  expectedNames: string[],
+  address?: string
 ): Promise<PhotoLookup> {
-  const encodedName = encodeURIComponent(name);
+  const trimmedAddress = address?.trim();
+  const searchQueries = [name, trimmedAddress ? `${name} ${trimmedAddress}` : undefined].filter(
+    (value, index, all): value is string => !!value && all.indexOf(value) === index
+  );
   const bias = `circle:${SEARCH_RADIUS_M}@${lat},${lng}`;
   const candidates: PhotoCandidate[] = [];
 
-  const findUrl =
-    "https://maps.googleapis.com/maps/api/place/findplacefromtext/json?" +
-    `input=${encodedName}&inputtype=textquery&fields=place_id,photos,geometry,name` +
-    `&locationbias=${encodeURIComponent(bias)}&key=${apiKey}`;
-  const findData = (await (await fetch(findUrl)).json()) as FindPlaceResponse;
-  const findCandidate = toPhotoCandidate(findData.candidates?.[0] ?? {});
-  if (findData.status === "OK" && findCandidate) {
-    candidates.push(findCandidate);
+  for (const query of searchQueries) {
+    const encodedQuery = encodeURIComponent(query);
+    const findUrl =
+      "https://maps.googleapis.com/maps/api/place/findplacefromtext/json?" +
+      `input=${encodedQuery}&inputtype=textquery&fields=place_id,photos,geometry,name` +
+      `&locationbias=${encodeURIComponent(bias)}&key=${apiKey}`;
+    const findData = (await (await fetch(findUrl)).json()) as FindPlaceResponse;
+    const findCandidate = toPhotoCandidate(findData.candidates?.[0] ?? {});
+    if (findData.status === "OK" && findCandidate) {
+      candidates.push(findCandidate);
+    }
+
+    const textUrl =
+      "https://maps.googleapis.com/maps/api/place/textsearch/json?" +
+      `query=${encodedQuery}&location=${lat},${lng}&radius=${SEARCH_RADIUS_M}&key=${apiKey}`;
+    const textData = (await (await fetch(textUrl)).json()) as TextSearchResponse;
+    for (const match of textData.results ?? []) {
+      const candidate = toPhotoCandidate(match);
+      if (candidate) candidates.push(candidate);
+    }
   }
 
+  const encodedName = encodeURIComponent(name);
   const nearbyUrl =
     "https://maps.googleapis.com/maps/api/place/nearbysearch/json?" +
     `location=${lat},${lng}&radius=${SEARCH_RADIUS_M}&keyword=${encodedName}&key=${apiKey}`;
   const nearbyData = (await (await fetch(nearbyUrl)).json()) as NearbySearchResponse;
   for (const match of nearbyData.results ?? []) {
-    const candidate = toPhotoCandidate(match);
-    if (candidate) candidates.push(candidate);
-  }
-
-  const textUrl =
-    "https://maps.googleapis.com/maps/api/place/textsearch/json?" +
-    `query=${encodedName}&location=${lat},${lng}&radius=${SEARCH_RADIUS_M}&key=${apiKey}`;
-  const textData = (await (await fetch(textUrl)).json()) as TextSearchResponse;
-  for (const match of textData.results ?? []) {
     const candidate = toPhotoCandidate(match);
     if (candidate) candidates.push(candidate);
   }
@@ -320,7 +339,8 @@ export async function fetchGooglePlacePhotoRefs(
   lat: number,
   lng: number,
   apiKey: string,
-  altName?: string
+  altName?: string,
+  address?: string
 ): Promise<{ placeId?: string; refs: string[] }> {
   const names = [name, altName]
     .map((value) => value?.trim())
@@ -331,7 +351,14 @@ export async function fetchGooglePlacePhotoRefs(
   const expectedNames = names;
 
   for (const queryName of names) {
-    const found = await lookupPhotosByName(queryName, lat, lng, apiKey, expectedNames);
+    const found = await lookupPhotosByName(
+      queryName,
+      lat,
+      lng,
+      apiKey,
+      expectedNames,
+      address
+    );
     if (found.placeId) {
       placeId = found.placeId;
       refs = found.refs;
@@ -362,8 +389,9 @@ export async function resolveGooglePlacePhotos(options: {
   lat: number;
   lng: number;
   googlePlaceId?: string | null;
+  address?: string | null;
 }): Promise<{ googlePlaceId?: string; refs: string[] }> {
-  const { apiKey, nameHe, nameEn, lat, lng, googlePlaceId } = options;
+  const { apiKey, nameHe, nameEn, lat, lng, googlePlaceId, address } = options;
 
   if (isRealGooglePlaceId(googlePlaceId)) {
     const refs = await fetchGooglePlacePhotoRefsByPlaceId(googlePlaceId!, apiKey);
@@ -377,7 +405,8 @@ export async function resolveGooglePlacePhotos(options: {
     lat,
     lng,
     apiKey,
-    nameEn ?? undefined
+    nameEn ?? undefined,
+    address ?? undefined
   );
   return { googlePlaceId: resolved.placeId, refs: resolved.refs };
 }

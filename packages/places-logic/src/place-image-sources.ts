@@ -243,6 +243,7 @@ export async function fetchPlaceImages(options: {
       lat: latitude,
       lng: longitude,
       googlePlaceId,
+      address,
     });
     if (resolved.refs.length > 0) {
       return {
