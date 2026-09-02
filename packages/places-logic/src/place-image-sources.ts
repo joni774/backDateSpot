@@ -1,4 +1,4 @@
-import { prisma, type Place, type PlaceCategory } from "@datespot/database";
+import { type Place, type PlaceCategory } from "@datespot/database";
 import {
   isCloudinaryConfigured,
   isCloudinaryUrl,

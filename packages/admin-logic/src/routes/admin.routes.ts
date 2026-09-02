@@ -11,6 +11,48 @@ import { placeCategorySchema, fetchPlaceImages, needsGooglePhoto, stockImageForC
 import { noopAdminCacheHooks, type AdminCacheHooks } from "../cache";
 import { createLeadBillingProcessor } from "../utils/lead-billing.util";
 
+async function countPlacesByCategorySafe(): Promise<Record<PlaceCategory, number>> {
+  const rows = await prisma.$queryRawUnsafe<Array<{ category: string; count: number }>>(
+    `SELECT "category"::text AS category, COUNT(*)::int AS count FROM "Place" WHERE "isActive" = true GROUP BY "category"`
+  );
+  const placesByCategory = Object.fromEntries(
+    (Object.values(PlaceCategory) as PlaceCategory[]).map((category) => [category, 0])
+  ) as Record<PlaceCategory, number>;
+  for (const row of rows) {
+    if ((Object.values(PlaceCategory) as string[]).includes(row.category)) {
+      placesByCategory[row.category as PlaceCategory] = row.count;
+    }
+  }
+  return placesByCategory;
+}
+
+async function fetchUnbilledLeadStatsSafe(): Promise<{ count: number; revenue: number }> {
+  try {
+    const stats = await prisma.placeLead.aggregate({
+      where: { leadInvoiceId: null, feeAgorot: { gt: 0 } },
+      _sum: { feeAgorot: true },
+      _count: true,
+    });
+    return {
+      count: stats._count,
+      revenue: stats._sum.feeAgorot ?? 0,
+    };
+  } catch (err) {
+    console.warn("[admin] unbilled leads query failed, falling back:", err);
+    try {
+      const rows = await prisma.$queryRawUnsafe<Array<{ count: number; revenue: number | null }>>(
+        `SELECT COUNT(*)::int AS count, COALESCE(SUM("feeAgorot"), 0)::int AS revenue FROM "PlaceLead" WHERE "feeAgorot" > 0`
+      );
+      return {
+        count: rows[0]?.count ?? 0,
+        revenue: rows[0]?.revenue ?? 0,
+      };
+    } catch {
+      return { count: 0, revenue: 0 };
+    }
+  }
+}
+
 const optionalUrl = z
   .string()
   .optional()
@@ -92,7 +134,7 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
       const weekAgo = new Date();
       weekAgo.setDate(weekAgo.getDate() - 7);
 
-      const [totalUsers, weeklyActiveUsers, premiumUsers, vipUsers, totalPlaces, totalLeads, weeklyLeads, leadFeeSum, unbilledLeadStats] =
+      const [totalUsers, weeklyActiveUsers, premiumUsers, vipUsers, totalPlaces, totalLeads, weeklyLeads, leadFeeSum, unbilledLeadStats, placesByCategory] =
         await Promise.all([
           prisma.user.count(),
           prisma.user.count({ where: { lastLoginAt: { gte: weekAgo } } }),
@@ -104,25 +146,9 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
           prisma.placeLead.count(),
           prisma.placeLead.count({ where: { createdAt: { gte: weekAgo } } }),
           prisma.placeLead.aggregate({ _sum: { feeAgorot: true } }),
-          prisma.placeLead.aggregate({
-            where: { leadInvoiceId: null, feeAgorot: { gt: 0 } },
-            _sum: { feeAgorot: true },
-            _count: true,
-          }),
+          fetchUnbilledLeadStatsSafe(),
+          countPlacesByCategorySafe(),
         ]);
-
-      const categoryCounts = await Promise.all(
-        (Object.values(PlaceCategory) as PlaceCategory[]).map((category) =>
-          prisma.place.count({ where: { category, isActive: true } })
-        )
-      );
-
-      const placesByCategory = Object.fromEntries(
-        (Object.values(PlaceCategory) as PlaceCategory[]).map((category, index) => [
-          category,
-          categoryCounts[index],
-        ])
-      ) as Record<PlaceCategory, number>;
 
       res.json({
         totalUsers,
@@ -134,8 +160,8 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
         totalLeads,
         weeklyLeads,
         leadRevenueAgorot: leadFeeSum._sum.feeAgorot ?? 0,
-        unbilledLeads: unbilledLeadStats._count,
-        unbilledRevenueAgorot: unbilledLeadStats._sum.feeAgorot ?? 0,
+        unbilledLeads: unbilledLeadStats.count,
+        unbilledRevenueAgorot: unbilledLeadStats.revenue,
         stripeBillingConfigured: leadBilling.isStripeConfigured,
       });
     } catch (err) {

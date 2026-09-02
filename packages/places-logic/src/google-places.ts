@@ -7,9 +7,9 @@ import {
 
 const GOOGLE_PHOTO_PREFIX = "gpl:";
 /** Reject Google matches that are clearly a different nearby business. */
-const MAX_MATCH_KM = 0.15;
+const MAX_MATCH_KM = 0.3;
 /** Within this distance, accept a partial name match (OSM coords are often offset). */
-const TIGHT_MATCH_KM = 0.04;
+const TIGHT_MATCH_KM = 0.08;
 const SEARCH_RADIUS_M = 150;
 
 type GooglePhoto = { photo_reference: string };
@@ -240,12 +240,21 @@ function pickBestPhotoCandidate(
 
   if (!best) {
     const veryClose = candidates.filter(
-      (candidate) => distanceKmFrom(lat, lng, candidate.location) <= TIGHT_MATCH_KM
+      (candidate) =>
+        candidate.refs.length > 0 &&
+        distanceKmFrom(lat, lng, candidate.location) <= TIGHT_MATCH_KM
     );
     if (veryClose.length === 1) {
       return {
         placeId: veryClose[0].placeId,
         refs: veryClose[0].refs,
+      };
+    }
+    const withPhotos = candidates.filter((candidate) => candidate.refs.length > 0);
+    if (withPhotos.length === 1 && distanceKmFrom(lat, lng, withPhotos[0].location) <= MAX_MATCH_KM) {
+      return {
+        placeId: withPhotos[0].placeId,
+        refs: withPhotos[0].refs,
       };
     }
     return { refs: [] };
@@ -392,11 +401,12 @@ export async function resolveGooglePlacePhotos(options: {
   address?: string | null;
 }): Promise<{ googlePlaceId?: string; refs: string[] }> {
   const { apiKey, nameHe, nameEn, lat, lng, googlePlaceId, address } = options;
+  const realGooglePlaceId = isRealGooglePlaceId(googlePlaceId) ? googlePlaceId!.trim() : undefined;
 
-  if (isRealGooglePlaceId(googlePlaceId)) {
-    const refs = await fetchGooglePlacePhotoRefsByPlaceId(googlePlaceId!, apiKey);
+  if (realGooglePlaceId) {
+    const refs = await fetchGooglePlacePhotoRefsByPlaceId(realGooglePlaceId, apiKey);
     if (refs.length > 0) {
-      return { googlePlaceId: googlePlaceId!.trim(), refs };
+      return { googlePlaceId: realGooglePlaceId, refs };
     }
   }
 

@@ -7,8 +7,10 @@ import {
 import {
   encodeGooglePhotoRef,
   fetchGooglePhotoBuffer,
+  fetchGooglePlacePhotoRefsByPlaceId,
   decodeGooglePhotoRef,
   isDirectImageUrl,
+  isRealGooglePlaceId,
   resolveGooglePlacePhotos,
 } from "./google-places";
 import {
@@ -167,6 +169,23 @@ export async function servePlacePhotoByIndex(options: {
     if (apiKey) {
       if (await serveGoogleRefAtIndex(res, place, index, apiKey, storedRefs)) return;
 
+      const realGooglePlaceId = isRealGooglePlaceId(place.googlePlaceId)
+        ? place.googlePlaceId!.trim()
+        : undefined;
+      if (realGooglePlaceId) {
+        const refs = await fetchGooglePlacePhotoRefsByPlaceId(realGooglePlaceId, apiKey);
+        if (await serveGoogleRefAtIndex(res, place, index, apiKey, refs)) {
+          void persistPlacePhotoCache({
+            placeId: place.id,
+            images: refs.map(encodeGooglePhotoRef),
+            googlePlaceId: realGooglePlaceId,
+          }).catch((err) => {
+            console.warn(`[places] photo cache update failed for ${place.nameHe}:`, err);
+          });
+          return;
+        }
+      }
+
       const fresh = await resolveFreshGoogleRefs(place, apiKey);
       if (await serveGoogleRefAtIndex(res, place, index, apiKey, fresh.refs)) {
         void persistPlacePhotoCache({
@@ -187,11 +206,15 @@ export async function servePlacePhotoByIndex(options: {
       latitude: place.latitude,
       longitude: place.longitude,
       address: place.address,
-      googlePlaceId: place.googlePlaceId,
+      googlePlaceId: isRealGooglePlaceId(place.googlePlaceId) ? place.googlePlaceId : null,
     });
     const fetchedCandidate = fetched.images[index] ?? fetched.images[0];
     if (await serveImageCandidate(res, fetchedCandidate, apiKey)) {
-      if (place.images.length === 0 || isGenericPlaceholder(place.images)) {
+      if (
+        place.images.length === 0 ||
+        isGenericPlaceholder(place.images) ||
+        storedRefs.length > 0
+      ) {
         void persistPlacePhotoCache({
           placeId: place.id,
           images: fetched.images,
