@@ -7,10 +7,6 @@ const envSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   SENDGRID_API_KEY: z.string().optional(),
   SENDGRID_FROM_EMAIL: z.string().email().optional(),
-  TWILIO_ACCOUNT_SID: z.string().optional(),
-  TWILIO_AUTH_TOKEN: z.string().optional(),
-  TWILIO_FROM_NUMBER: z.string().optional(),
-  STRIPE_SECRET_KEY: z.string().optional(),
   REDIS_URL: z.string().optional(),
 });
 
