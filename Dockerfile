@@ -36,4 +36,5 @@ COPY --from=builder /app/apps/api/node_modules ./apps/api/node_modules
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/packages ./packages
 EXPOSE 3000
-CMD ["sh", "-c", "cd packages/database && npx prisma migrate deploy && cd /app && node apps/api/dist/index.js"]
+# Start API immediately; run migrations in background so Railway healthcheck passes in time.
+CMD ["sh", "-c", "(cd packages/database && npx prisma migrate deploy) & exec node apps/api/dist/index.js"]

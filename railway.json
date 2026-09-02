@@ -8,6 +8,6 @@
     "preDeployCommand": null,
     "startCommand": null,
     "healthcheckPath": "/health",
-    "healthcheckTimeout": 30
+    "healthcheckTimeout": 120
   }
 }
