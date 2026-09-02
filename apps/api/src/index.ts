@@ -9,6 +9,7 @@ import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
 import os from "os";
+import { prisma } from "@datespot/database";
 import { env } from "./config/env";
 import authRoutes from "./routes/auth.routes";
 import placesRoutes from "./routes/places.routes";
@@ -33,8 +34,26 @@ app.use(
 app.use(express.json());
 app.use(morgan("dev"));
 
-app.get("/health", (_req, res) => {
-  res.json({ status: "ok", service: "datespot-api" });
+app.get("/health", async (_req, res) => {
+  let placesQueryOk = false;
+  try {
+    await prisma.$queryRawUnsafe<Array<{ c: number }>>(
+      `SELECT COUNT(*)::int AS c FROM "Place" WHERE "isActive" = true`
+    );
+    placesQueryOk = true;
+  } catch (err) {
+    console.warn("[health] places raw count failed:", err);
+  }
+
+  res.json({
+    status: "ok",
+    service: "datespot-api",
+    build:
+      process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) ??
+      process.env.GIT_COMMIT?.slice(0, 7) ??
+      "dev",
+    placesQueryOk,
+  });
 });
 
 app.use("/api/auth", authRoutes);
