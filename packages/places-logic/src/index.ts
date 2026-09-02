@@ -36,7 +36,7 @@ export {
   FOOD_CATEGORIES,
   type PlaceImageFetchResult,
 } from "./place-image-sources";
-export { findPlacesSafe, findPlaceByIdSafe } from "./place-query-safe";
+export { findPlacesSafe, findPlaceByIdSafe, findPlacesByIdsSafe, incrementPlaceViewCountSafe, updatePlaceOpeningHoursSafe } from "./place-query-safe";
 export {
   stockImageForCategory,
   servePlacePhotoByIndex,

@@ -16,7 +16,7 @@ import {
 import { ingestGoogleNearbyPlaces } from "../google-nearby";
 import { ingestOsmNearbyPlaces } from "../osm-nearby";
 import { attachGooglePhotosToPlaces } from "../place-image-sources";
-import { findPlaceByIdSafe, findPlacesSafe } from "../place-query-safe";
+import { findPlaceByIdSafe, findPlacesByIdsSafe, findPlacesSafe, incrementPlaceViewCountSafe, updatePlaceOpeningHoursSafe } from "../place-query-safe";
 import { placeMatchesCategory, prismaCategoryFilter } from "../category-filter";
 import {
   fetchGoogleOpeningHoursForBusiness,
@@ -379,12 +379,18 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
         (req.query.language as "he" | "en" | "ar" | undefined) ?? "he";
       const saved = await prisma.savedPlace.findMany({
         where: { userId: req.user!.userId },
-        include: { place: true },
         orderBy: { savedAt: "desc" },
       });
+      const placeById = new Map(
+        (await findPlacesByIdsSafe(saved.map((s) => s.placeId))).map((place) => [
+          place.id,
+          place,
+        ])
+      );
       const places = saved
-        .filter((s) => s.place.isActive)
-        .map((s) => mapPlaceListItem(s.place, language, null, false, baseUrl));
+        .map((s) => placeById.get(s.placeId))
+        .filter((place): place is Place => place != null && place.isActive)
+        .map((place) => mapPlaceListItem(place, language, null, false, baseUrl));
       res.json({ places });
     } catch (err) {
       console.error(err);
@@ -451,12 +457,18 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
         (req.query.language as "he" | "en" | "ar" | undefined) ?? "he";
       const favorites = await prisma.favorite.findMany({
         where: { userId: req.user!.userId },
-        include: { place: true },
         orderBy: { createdAt: "desc" },
       });
+      const placeById = new Map(
+        (await findPlacesByIdsSafe(favorites.map((f) => f.placeId))).map((place) => [
+          place.id,
+          place,
+        ])
+      );
       const places = favorites
-        .filter((f) => f.place.isActive)
-        .map((f) => mapPlaceListItem(f.place, language, null, false, baseUrl));
+        .map((f) => placeById.get(f.placeId))
+        .filter((place): place is Place => place != null && place.isActive)
+        .map((place) => mapPlaceListItem(place, language, null, false, baseUrl));
       res.json({ places });
     } catch (err) {
       console.error(err);
@@ -719,20 +731,14 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
           });
           if (enriched.hours) {
             openingHours = enriched.hours;
-            await prisma.place.update({
-              where: { id },
-              data: { openingHours: enriched.hours },
-            });
+            await updatePlaceOpeningHoursSafe(id, enriched.hours);
           }
         } catch (err) {
           console.warn(`[places] Google hours enrich failed for ${place.nameHe}:`, err);
         }
       }
 
-      await prisma.place.update({
-        where: { id },
-        data: { viewCount: { increment: 1 } },
-      });
+      await incrementPlaceViewCountSafe(id);
 
       const { name, description } = localizePlace(place, language);
       let isSaved = false;

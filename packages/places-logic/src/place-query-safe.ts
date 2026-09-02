@@ -152,3 +152,37 @@ export async function findPlaceByIdSafe(id: string): Promise<Place | null> {
     return null;
   }
 }
+
+export async function findPlacesByIdsSafe(ids: string[]): Promise<Place[]> {
+  if (ids.length === 0) return [];
+  try {
+    const rows = await prisma.$queryRawUnsafe<Record<string, unknown>[]>(
+      `SELECT * FROM "Place" WHERE "id" = ANY($1::uuid[])`,
+      ids
+    );
+    return rows
+      .map((row) => mapRawPlaceRow(row))
+      .filter((place): place is Place => place != null);
+  } catch (err) {
+    console.warn("[places] raw batch lookup failed:", err);
+    return [];
+  }
+}
+
+export async function incrementPlaceViewCountSafe(id: string): Promise<void> {
+  await prisma.$executeRawUnsafe(
+    `UPDATE "Place" SET "viewCount" = "viewCount" + 1 WHERE "id" = $1`,
+    id
+  );
+}
+
+export async function updatePlaceOpeningHoursSafe(
+  id: string,
+  openingHours: unknown
+): Promise<void> {
+  await prisma.$executeRawUnsafe(
+    `UPDATE "Place" SET "openingHours" = $1::jsonb WHERE "id" = $2`,
+    JSON.stringify(openingHours),
+    id
+  );
+}
