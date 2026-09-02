@@ -7,7 +7,7 @@ import {
   PriceRange,
   LeadType,
 } from "@datespot/database";
-import { placeCategorySchema, fetchPlaceImages, needsGooglePhoto, stockImageForCategory, persistPlacePhotoCache, FOOD_CATEGORIES, findPlacesSafe } from "@datespot/places-logic";
+import { placeCategorySchema, fetchPlaceImages, needsGooglePhoto, stockImageForCategory, persistPlacePhotoCache, FOOD_CATEGORIES, findPlacesSafe, materializeImagesToCloudinary, isCloudinaryConfigured, isCloudinaryUrl } from "@datespot/places-logic";
 import { noopAdminCacheHooks, type AdminCacheHooks } from "../cache";
 import { createLeadBillingProcessor } from "../utils/lead-billing.util";
 
@@ -349,6 +349,21 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
 
       for (const place of pending) {
         try {
+          // Prefer migrating existing stored images (gpl:/http) into Cloudinary.
+          if (isCloudinaryConfigured() && place.images.length > 0) {
+            const materialized = await materializeImagesToCloudinary(place.id, place.images);
+            if (materialized.some(isCloudinaryUrl)) {
+              await persistPlacePhotoCache({
+                placeId: place.id,
+                images: materialized,
+                googlePlaceId: place.googlePlaceId ?? undefined,
+              });
+              updated += 1;
+              details.push({ name: place.nameHe, result: "updated" });
+              continue;
+            }
+          }
+
           const fetched = await fetchPlaceImages({
             nameHe: place.nameHe,
             nameEn: place.nameEn,
