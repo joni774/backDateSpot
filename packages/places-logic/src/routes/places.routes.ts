@@ -16,6 +16,7 @@ import {
 import { ingestGoogleNearbyPlaces } from "../google-nearby";
 import { ingestOsmNearbyPlaces } from "../osm-nearby";
 import { attachGooglePhotosToPlaces } from "../place-image-sources";
+import { findPlaceByIdSafe, findPlacesSafe } from "../place-query-safe";
 import { placeMatchesCategory, prismaCategoryFilter } from "../category-filter";
 import {
   fetchGoogleOpeningHoursForBusiness,
@@ -238,7 +239,7 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
           where.longitude = { gte: bb.minLng, lte: bb.maxLng };
         }
 
-        let rows = await prisma.place.findMany({ where });
+        let rows = await findPlacesSafe({ where });
         if (query.category) {
           rows = rows.filter((place) => placeMatchesCategory(place, query.category));
         }
@@ -330,7 +331,7 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
         }
         if (filtered.length === 0) {
           const bb = radiusToBoundingBox(query.lat, query.lng, effectiveRadius);
-          const nearbyAny = await prisma.place.findMany({
+          const nearbyAny = await findPlacesSafe({
             where: {
               isActive: true,
               latitude: { gte: bb.minLat, lte: bb.maxLat },
@@ -389,7 +390,7 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
   router.post("/save", config.verifyTokenMiddleware, async (req, res) => {
     try {
       const body = saveSchema.parse(req.body);
-      const place = await prisma.place.findUnique({ where: { id: body.placeId } });
+      const place = await findPlaceByIdSafe(body.placeId);
       if (!place || !place.isActive) {
         res.status(404).json({ error: "Place not found" });
         return;
@@ -461,7 +462,7 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
   router.post("/favorites", config.verifyTokenMiddleware, async (req, res) => {
     try {
       const body = saveSchema.parse(req.body);
-      const place = await prisma.place.findUnique({ where: { id: body.placeId } });
+      const place = await findPlaceByIdSafe(body.placeId);
       if (!place || !place.isActive) {
         res.status(404).json({ error: "Place not found" });
         return;
@@ -542,7 +543,7 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
     try {
       const id = z.string().uuid().parse(req.params.id);
       const index = Math.max(0, parseInt(String(req.params.index), 10) || 0);
-      const place = await prisma.place.findUnique({ where: { id } });
+      const place = await findPlaceByIdSafe(id);
       if (!place || !place.isActive) {
         res.status(404).json({ error: "Place not found" });
         return;
@@ -606,7 +607,7 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
     try {
       const id = z.string().uuid().parse(req.params.id);
       const body = reviewSchema.parse(req.body);
-      const place = await prisma.place.findUnique({ where: { id } });
+      const place = await findPlaceByIdSafe(id);
       if (!place || !place.isActive) {
         res.status(404).json({ error: "Place not found" });
         return;
@@ -642,7 +643,7 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
     try {
       const id = z.string().uuid().parse(req.params.id);
       const body = leadSchema.parse(req.body);
-      const place = await prisma.place.findUnique({ where: { id } });
+      const place = await findPlaceByIdSafe(id);
       if (!place || !place.isActive) {
         res.status(404).json({ error: "Place not found" });
         return;
@@ -694,7 +695,7 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
       const id = z.string().uuid().parse(req.params.id);
       const language =
         (req.query.language as "he" | "en" | "ar" | undefined) ?? "he";
-      const place = await prisma.place.findUnique({ where: { id } });
+      const place = await findPlaceByIdSafe(id);
       if (!place || !place.isActive) {
         res.status(404).json({ error: "Place not found" });
         return;

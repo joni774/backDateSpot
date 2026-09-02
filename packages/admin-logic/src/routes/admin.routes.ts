@@ -7,7 +7,7 @@ import {
   PriceRange,
   LeadType,
 } from "@datespot/database";
-import { placeCategorySchema, fetchPlaceImages, needsGooglePhoto, stockImageForCategory, persistPlacePhotoCache, FOOD_CATEGORIES } from "@datespot/places-logic";
+import { placeCategorySchema, fetchPlaceImages, needsGooglePhoto, stockImageForCategory, persistPlacePhotoCache, FOOD_CATEGORIES, findPlacesSafe } from "@datespot/places-logic";
 import { noopAdminCacheHooks, type AdminCacheHooks } from "../cache";
 import { createLeadBillingProcessor } from "../utils/lead-billing.util";
 
@@ -154,7 +154,7 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
             ? false
             : undefined;
 
-      const places = await prisma.place.findMany({
+      const places = await findPlacesSafe({
         where: {
           ...(category && { category }),
           ...(isActive !== undefined && { isActive }),
@@ -339,7 +339,7 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
       const limit = Math.min(60, Math.max(1, parseInt(String(req.body?.limit ?? req.query.limit ?? "20"), 10)));
       const offset = Math.max(0, parseInt(String(req.body?.offset ?? req.query.offset ?? "0"), 10));
 
-      const places = await prisma.place.findMany({ orderBy: { id: "asc" } });
+      const places = await findPlacesSafe({ orderBy: { id: "asc" } });
       const slice = places.slice(offset, offset + limit);
       const pending = slice.filter((place) => needsGooglePhoto(place.images));
 
@@ -404,7 +404,7 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
 
   router.post("/restore-photos", async (_req, res) => {
     try {
-      const places = await prisma.place.findMany({ orderBy: { id: "asc" } });
+      const places = await findPlacesSafe({ orderBy: { id: "asc" } });
       const toFix = places.filter(
         (place) => place.images.length === 0 || needsGooglePhoto(place.images)
       );
