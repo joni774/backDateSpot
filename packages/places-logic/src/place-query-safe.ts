@@ -156,9 +156,10 @@ export async function findPlaceByIdSafe(id: string): Promise<Place | null> {
 export async function findPlacesByIdsSafe(ids: string[]): Promise<Place[]> {
   if (ids.length === 0) return [];
   try {
+    const placeholders = ids.map((_, index) => `$${index + 1}`).join(", ");
     const rows = await prisma.$queryRawUnsafe<Record<string, unknown>[]>(
-      `SELECT * FROM "Place" WHERE "id" = ANY($1::uuid[])`,
-      ids
+      `SELECT * FROM "Place" WHERE "id" IN (${placeholders})`,
+      ...ids
     );
     return rows
       .map((row) => mapRawPlaceRow(row))
