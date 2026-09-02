@@ -17,6 +17,7 @@ export type LeadType =
   | "CALL"
   | "WHATSAPP"
   | "WEBSITE"
+  | "NAVIGATE"
   | "DELIVERY_WOLT"
   | "DELIVERY_TENBIS"
   | "DELIVERY_MISHLOHA"

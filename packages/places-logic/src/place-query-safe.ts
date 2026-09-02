@@ -61,6 +61,9 @@ function mapRawPlaceRow(row: Record<string, unknown>): Place | null {
     displayOrder: Number(row.displayOrder ?? 0),
     viewCount: Number(row.viewCount ?? 0),
     leadFeeAgorot: Number(row.leadFeeAgorot ?? 0),
+    billingEmail: row.billingEmail == null ? null : String(row.billingEmail),
+    stripeCustomerId: row.stripeCustomerId == null ? null : String(row.stripeCustomerId),
+    leadBillingEnabled: row.leadBillingEnabled === true,
     sponsoredUntil:
       row.sponsoredUntil instanceof Date
         ? row.sponsoredUntil

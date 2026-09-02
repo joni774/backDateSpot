@@ -33,15 +33,24 @@ enum PriceRange {
   EXPENSIVE
 }
 
-// Lead type for business commission tracking (call / WhatsApp / website / delivery).
+// Lead type for business commission tracking (call / WhatsApp / website / delivery / navigation).
 enum LeadType {
   CALL
   WHATSAPP
   WEBSITE
+  NAVIGATE
   DELIVERY_WOLT
   DELIVERY_TENBIS
   DELIVERY_MISHLOHA
   DELIVERY_CIBUS
+}
+
+enum LeadInvoiceStatus {
+  DRAFT
+  OPEN
+  PAID
+  VOID
+  FAILED
 }
 
 // App users: registration, login, subscription tier, admin flag.
@@ -125,6 +134,11 @@ model Place {
   viewCount      Int           @default(0)
   /// Flat fee billed to the business per recorded lead (agorot). 0 = no commission.
   leadFeeAgorot  Int           @default(0)
+  /// Business billing contact for Stripe lead invoices.
+  billingEmail       String?
+  stripeCustomerId   String?
+  /// When true, unbilled leads are included in batch invoice runs.
+  leadBillingEnabled Boolean       @default(false)
   /// When set and in the future, place is boosted in lists and marked as sponsored.
   sponsoredUntil DateTime?
   /// Higher priority wins among concurrently sponsored places.
@@ -137,11 +151,12 @@ model Place {
   reviews        Review[]
   favorites      Favorite[]
   leads          PlaceLead[]
+  leadInvoices   LeadInvoice[]
 
   @@index([sponsoredUntil])
 }
 
-// User contact intent toward a business (commissionable lead). Billing is offline/admin for MVP.
+// User contact intent toward a business (commissionable lead).
 model PlaceLead {
   id         String   @id @default(uuid())
   placeId    String
@@ -149,13 +164,34 @@ model PlaceLead {
   type       LeadType
   /// Snapshot of place.leadFeeAgorot at record time.
   feeAgorot  Int      @default(0)
+  leadInvoiceId String?
   createdAt  DateTime @default(now())
   place      Place    @relation(fields: [placeId], references: [id], onDelete: Cascade)
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  leadInvoice LeadInvoice? @relation(fields: [leadInvoiceId], references: [id], onDelete: SetNull)
 
   @@index([placeId, createdAt])
   @@index([userId])
   @@index([createdAt])
+  @@index([leadInvoiceId])
+}
+
+// Stripe (or dev) invoice grouping unbilled leads for a business.
+model LeadInvoice {
+  id              String            @id @default(uuid())
+  placeId         String
+  stripeInvoiceId String?
+  status          LeadInvoiceStatus @default(DRAFT)
+  totalAgorot     Int
+  leadCount       Int
+  periodStart     DateTime
+  periodEnd       DateTime
+  createdAt       DateTime          @default(now())
+  place           Place             @relation(fields: [placeId], references: [id], onDelete: Cascade)
+  leads           PlaceLead[]
+
+  @@index([placeId, createdAt])
+  @@index([status])
 }
 
 // User bookmarked places (heart / saved list).
