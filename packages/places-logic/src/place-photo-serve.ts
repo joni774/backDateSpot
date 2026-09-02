@@ -1,6 +1,10 @@
 import { type Place, type PlaceCategory } from "@datespot/database";
 import type { Response } from "express";
 import {
+  isCloudinaryConfigured,
+  uploadPlaceImageBuffer,
+} from "./cloudinary-storage";
+import {
   encodeGooglePhotoRef,
   fetchGooglePhotoBuffer,
   decodeGooglePhotoRef,
@@ -79,11 +83,32 @@ function categoryStockImage(place: Place): string {
 async function serveGoogleRef(
   res: Response,
   ref: string,
-  apiKey: string
+  apiKey: string,
+  persist?: { placeId: string; index: number }
 ): Promise<boolean> {
   const photo = await fetchGooglePhotoBuffer(ref, apiKey);
   if (!photo) return false;
   await sendImageBuffer(res, photo.buffer, photo.contentType);
+
+  if (persist && isCloudinaryConfigured()) {
+    void uploadPlaceImageBuffer({
+      placeId: persist.placeId,
+      index: persist.index,
+      buffer: photo.buffer,
+      contentType: photo.contentType,
+    })
+      .then((url) => {
+        if (!url) return;
+        return persistPlacePhotoCache({
+          placeId: persist.placeId,
+          images: [url],
+        });
+      })
+      .catch((err) => {
+        console.warn(`[places] cloudinary persist failed for ${persist.placeId}:`, err);
+      });
+  }
+
   return true;
 }
 
@@ -101,6 +126,21 @@ async function serveImageCandidate(
     return proxyExternalImage(res, candidate);
   }
   return false;
+}
+
+async function serveGoogleRefAtIndex(
+  res: Response,
+  place: Place,
+  index: number,
+  apiKey: string,
+  refs: string[]
+): Promise<boolean> {
+  const storedRef = refs[index] ?? refs[0];
+  if (!storedRef) return false;
+  return serveGoogleRef(res, storedRef, apiKey, {
+    placeId: place.id,
+    index,
+  });
 }
 
 async function serveFallbackImages(res: Response, place: Place): Promise<void> {
@@ -125,12 +165,10 @@ export async function servePlacePhotoByIndex(options: {
 
     const storedRefs = storedGoogleRefs(place);
     if (apiKey) {
-      const storedRef = storedRefs[index] ?? storedRefs[0];
-      if (storedRef && (await serveGoogleRef(res, storedRef, apiKey))) return;
+      if (await serveGoogleRefAtIndex(res, place, index, apiKey, storedRefs)) return;
 
       const fresh = await resolveFreshGoogleRefs(place, apiKey);
-      const freshRef = fresh.refs[index] ?? fresh.refs[0];
-      if (freshRef && (await serveGoogleRef(res, freshRef, apiKey))) {
+      if (await serveGoogleRefAtIndex(res, place, index, apiKey, fresh.refs)) {
         void persistPlacePhotoCache({
           placeId: place.id,
           images: fresh.refs.map(encodeGooglePhotoRef),

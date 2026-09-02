@@ -12,6 +12,7 @@
     "db:enrich-photos": "pnpm --filter @datespot/database exec tsx scripts/enrich-place-photos.ts",
     "db:restore-photos": "pnpm --filter @datespot/database exec tsx scripts/restore-place-photos.ts",
     "db:enrich-hours": "pnpm --filter @datespot/database exec tsx scripts/enrich-place-hours.ts",
+    "db:migrate-cloudinary": "pnpm --filter @datespot/places-logic exec tsx scripts/migrate-images-to-cloudinary.ts",
     "db:init:docker": "docker compose run --rm db-init",
     "docker:dev": "docker compose --profile dev up --build",
     "docker:microservices": "docker compose --profile microservices up --build",

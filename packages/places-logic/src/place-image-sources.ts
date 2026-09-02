@@ -1,7 +1,17 @@
 import { prisma, type Place, type PlaceCategory } from "@datespot/database";
 import {
+  isCloudinaryConfigured,
+  isCloudinaryUrl,
+  uploadPlaceImageBuffer,
+  uploadPlaceImageFromUrl,
+} from "./cloudinary-storage";
+import {
+  decodeGooglePhotoRef,
   encodeGooglePhotoRef,
+  fetchGooglePhotoBuffer,
   getGooglePlacesApiKey,
+  isDirectImageUrl,
+  isGenericStockUrl,
   isRealGooglePlaceId,
   resolveGooglePlacePhotos,
 } from "./google-places";
@@ -205,10 +215,81 @@ export function isGenericPlaceholder(images: string[]): boolean {
   );
 }
 
-/** True when the place still has no Google photo of that business. */
+/**
+ * True when the place still needs a durable business photo.
+ * Cloudinary URLs count as done; bare Google `gpl:` refs do not (they expire / need API).
+ */
 export function needsGooglePhoto(images: string[]): boolean {
+  if (images.some(isCloudinaryUrl)) return false;
   if (isGenericPlaceholder(images)) return true;
-  return !images.some((url) => url.startsWith("gpl:"));
+  // Stable non-stock http(s) URLs are usable, but prefer migrating them to Cloudinary.
+  if (
+    isCloudinaryConfigured() &&
+    images.some((url) => isDirectImageUrl(url) && !isGenericStockUrl(url))
+  ) {
+    return true;
+  }
+  if (images.some((url) => isDirectImageUrl(url) && !isGenericStockUrl(url))) {
+    return false;
+  }
+  // Only gpl: / empty → still needs enrichment
+  return true;
+}
+
+/** Upload Google refs / remote URLs to Cloudinary and return durable https URLs. */
+export async function materializeImagesToCloudinary(
+  placeId: string,
+  images: string[],
+  apiKey?: string
+): Promise<string[]> {
+  if (!isCloudinaryConfigured() || images.length === 0) return images;
+
+  const key = apiKey || getGooglePlacesApiKey();
+  const out: string[] = [];
+
+  for (let index = 0; index < images.length; index++) {
+    const image = images[index];
+    if (isCloudinaryUrl(image)) {
+      out.push(image);
+      continue;
+    }
+
+    const gplRef = decodeGooglePhotoRef(image);
+    if (gplRef) {
+      if (key) {
+        const photo = await fetchGooglePhotoBuffer(gplRef, key);
+        if (photo) {
+          const uploaded = await uploadPlaceImageBuffer({
+            placeId,
+            index,
+            buffer: photo.buffer,
+            contentType: photo.contentType,
+          });
+          if (uploaded) {
+            out.push(uploaded);
+            continue;
+          }
+        }
+      }
+      // Keep gpl ref if upload failed — proxy may still work when Google key is available.
+      out.push(image);
+      continue;
+    }
+
+    if (isDirectImageUrl(image) && !isGenericStockUrl(image)) {
+      const uploaded = await uploadPlaceImageFromUrl({
+        placeId,
+        index,
+        url: image,
+      });
+      out.push(uploaded ?? image);
+      continue;
+    }
+
+    out.push(image);
+  }
+
+  return out.length > 0 ? out : images;
 }
 
 export type PlaceImageFetchResult = {
@@ -273,15 +354,14 @@ export async function fetchPlaceImages(options: {
   return { images: [] };
 }
 
-/** Persist Google photo refs and optionally link a verified googlePlaceId. */
+/** Persist place images (prefer Cloudinary URLs) and optionally link googlePlaceId. */
 export async function persistPlacePhotoCache(options: {
   placeId: string;
   images: string[];
   googlePlaceId?: string;
 }): Promise<void> {
-  const data: { images: string[]; googlePlaceId?: string } = {
-    images: options.images,
-  };
+  const images = await materializeImagesToCloudinary(options.placeId, options.images);
+  const data: { images: string[]; googlePlaceId?: string } = { images };
   if (options.googlePlaceId && isRealGooglePlaceId(options.googlePlaceId)) {
     data.googlePlaceId = options.googlePlaceId;
   }
@@ -292,7 +372,7 @@ export async function persistPlacePhotoCache(options: {
     if (!data.googlePlaceId) throw err;
     await prisma.place.update({
       where: { id: options.placeId },
-      data: { images: options.images },
+      data: { images },
     });
   }
 }

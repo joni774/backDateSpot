@@ -73,8 +73,8 @@ These are part of PRD section 9 but not required for MVP API startup:
 | `SENDGRID_API_KEY` | Registration/password emails (SendGrid) |
 | `AWS_SES_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `EMAIL_FROM` | Email via AWS SES |
 | `STORAGE_PROVIDER`, `AWS_S3_BUCKET`, `AWS_S3_REGION` | Image storage (S3) |
-| `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` | Image storage (Cloudinary) |
-| `GOOGLE_MAPS_API_KEY`, `GOOGLE_PLACES_API_KEY` | Maps / Places import |
+| `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` | Durable place photos via Cloudinary (recommended). Enrichment uploads Google/OSM images here and stores `https://res.cloudinary.com/...` in DB |
+| `GOOGLE_MAPS_API_KEY`, `GOOGLE_PLACES_API_KEY` | Maps / Places import (needed once to fetch Google photos into Cloudinary) |
 | `FCM_SERVER_KEY` | Push notifications (v2) |
 | `STRIPE_SECRET_KEY`, `TRANZILA_TERMINAL` | Payments (v2) |
 

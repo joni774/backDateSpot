@@ -33,9 +33,14 @@ export {
   needsGooglePhoto,
   fetchPlaceImages,
   persistPlacePhotoCache,
+  materializeImagesToCloudinary,
   FOOD_CATEGORIES,
   type PlaceImageFetchResult,
 } from "./place-image-sources";
+export {
+  isCloudinaryConfigured,
+  isCloudinaryUrl,
+} from "./cloudinary-storage";
 export { findPlacesSafe, findPlaceByIdSafe, findPlacesByIdsSafe, incrementPlaceViewCountSafe, updatePlaceOpeningHoursSafe } from "./place-query-safe";
 export {
   stockImageForCategory,
