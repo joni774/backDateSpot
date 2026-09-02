@@ -9,12 +9,14 @@ import {
   decodeGooglePhotoRef,
   encodeGooglePhotoRef,
   fetchGooglePhotoBuffer,
+  fetchGooglePlacePhotoRefsByPlaceId,
   getGooglePlacesApiKey,
   isDirectImageUrl,
   isGenericStockUrl,
   isRealGooglePlaceId,
   resolveGooglePlacePhotos,
 } from "./google-places";
+import { updatePlacePhotoCacheSafe } from "./place-query-safe";
 
 const CATEGORY_SEARCH_TERMS: Record<PlaceCategory, string[]> = {
   ROMANTIC_DATE: ["park", "garden", "romantic"],
@@ -315,6 +317,7 @@ export async function fetchPlaceImages(options: {
 }): Promise<PlaceImageFetchResult> {
   const { nameHe, nameEn, category, latitude, longitude, address, googlePlaceId } = options;
   const googleKey = getGooglePlacesApiKey();
+  const realGooglePlaceId = isRealGooglePlaceId(googlePlaceId) ? googlePlaceId!.trim() : null;
 
   if (googleKey) {
     const resolved = await resolveGooglePlacePhotos({
@@ -323,7 +326,7 @@ export async function fetchPlaceImages(options: {
       nameEn,
       lat: latitude,
       lng: longitude,
-      googlePlaceId,
+      googlePlaceId: realGooglePlaceId,
       address,
     });
     if (resolved.refs.length > 0) {
@@ -361,19 +364,24 @@ export async function persistPlacePhotoCache(options: {
   googlePlaceId?: string;
 }): Promise<void> {
   const images = await materializeImagesToCloudinary(options.placeId, options.images);
-  const data: { images: string[]; googlePlaceId?: string } = { images };
-  if (options.googlePlaceId && isRealGooglePlaceId(options.googlePlaceId)) {
-    data.googlePlaceId = options.googlePlaceId;
-  }
+  const googlePlaceId =
+    options.googlePlaceId && isRealGooglePlaceId(options.googlePlaceId)
+      ? options.googlePlaceId.trim()
+      : undefined;
 
   try {
-    await prisma.place.update({ where: { id: options.placeId }, data });
-  } catch (err) {
-    if (!data.googlePlaceId) throw err;
-    await prisma.place.update({
-      where: { id: options.placeId },
-      data: { images },
+    await updatePlacePhotoCacheSafe({
+      placeId: options.placeId,
+      images,
+      googlePlaceId,
     });
+  } catch (err) {
+    console.warn(`[places] photo cache persist failed for ${options.placeId}:`, err);
+    try {
+      await updatePlacePhotoCacheSafe({ placeId: options.placeId, images });
+    } catch (innerErr) {
+      console.warn(`[places] photo cache images-only persist failed:`, innerErr);
+    }
   }
 }
 

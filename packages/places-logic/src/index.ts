@@ -41,7 +41,7 @@ export {
   isCloudinaryConfigured,
   isCloudinaryUrl,
 } from "./cloudinary-storage";
-export { findPlacesSafe, findPlaceByIdSafe, findPlacesByIdsSafe, incrementPlaceViewCountSafe, updatePlaceOpeningHoursSafe } from "./place-query-safe";
+export { findPlacesSafe, findPlaceByIdSafe, findPlacesByIdsSafe, incrementPlaceViewCountSafe, updatePlaceOpeningHoursSafe, updatePlacePhotoCacheSafe } from "./place-query-safe";
 export {
   stockImageForCategory,
   servePlacePhotoByIndex,

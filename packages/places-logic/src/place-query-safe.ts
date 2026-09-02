@@ -190,3 +190,21 @@ export async function updatePlaceOpeningHoursSafe(
     id
   );
 }
+
+export async function updatePlacePhotoCacheSafe(options: {
+  placeId: string;
+  images: string[];
+  googlePlaceId?: string | null;
+}): Promise<void> {
+  const params: unknown[] = [options.images, options.placeId];
+  let googleClause = "";
+  if (options.googlePlaceId) {
+    params.splice(1, 0, options.googlePlaceId);
+    googleClause = `, "googlePlaceId" = $2`;
+  }
+
+  await prisma.$executeRawUnsafe(
+    `UPDATE "Place" SET "images" = $1::text[]${googleClause} WHERE "id" = $${params.length}`,
+    ...params
+  );
+}
