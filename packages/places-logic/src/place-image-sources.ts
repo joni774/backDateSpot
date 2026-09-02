@@ -335,9 +335,8 @@ export async function fetchPlaceImages(options: {
         googlePlaceId: resolved.googlePlaceId,
       };
     }
-    if (FOOD_CATEGORIES.has(category)) {
-      return { images: [] };
-    }
+    // Fall through to OSM/Wikimedia even for food places so Cloudinary can
+    // still store a durable image when Google matching/billing fails.
   }
 
   const osmImage = await fetchOsmImageUrl(latitude, longitude);
