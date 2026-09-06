@@ -89,6 +89,8 @@ export async function matchWoltListing(options: {
   }
 
   const discoveryUrl = `https://wolt.com/he/discovery?q=${encodeURIComponent(query)}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12_000);
   try {
     const res = await fetch(discoveryUrl, {
       headers: {
@@ -97,7 +99,7 @@ export async function matchWoltListing(options: {
         Accept: "text/html,application/json",
       },
       redirect: "follow",
-      signal: AbortSignal.timeout(12_000),
+      signal: controller.signal,
     });
     if (!res.ok) {
       return {
@@ -142,6 +144,8 @@ export async function matchWoltListing(options: {
   } catch (err) {
     console.warn("[delivery] Wolt match failed:", err);
     return { status: "UNKNOWN", url: null, confidence: 0, reason: "fetch_error" };
+  } finally {
+    clearTimeout(timer);
   }
 }
 

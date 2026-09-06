@@ -575,8 +575,11 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
         res.status(400).json({ error: "Invalid place id" });
         return;
       }
-      console.error(err);
-      res.status(500).json({ error: "Failed to check delivery availability" });
+      console.error("[admin] delivery-check single failed:", err);
+      res.status(500).json({
+        error: "Failed to check delivery availability",
+        detail: err instanceof Error ? err.message : String(err),
+      });
     }
   });
 

@@ -260,6 +260,44 @@ export async function updatePlaceDeliveryStatusSafe(options: {
   deliveryStatusConfirmedByAdmin?: boolean;
   deliveryStatusCheckedAt?: Date | null;
 }): Promise<void> {
+  const data: Record<string, unknown> = {};
+  if (options.deliveryWoltStatus != null) {
+    data.deliveryWoltStatus = String(options.deliveryWoltStatus);
+  }
+  if (options.deliveryTenBisStatus != null) {
+    data.deliveryTenBisStatus = String(options.deliveryTenBisStatus);
+  }
+  if (options.deliveryMishlohaStatus != null) {
+    data.deliveryMishlohaStatus = String(options.deliveryMishlohaStatus);
+  }
+  if (options.deliveryWoltUrl !== undefined) {
+    data.deliveryWoltUrl = options.deliveryWoltUrl;
+  }
+  if (options.deliveryTenBisUrl !== undefined) {
+    data.deliveryTenBisUrl = options.deliveryTenBisUrl;
+  }
+  if (options.deliveryMishlohaUrl !== undefined) {
+    data.deliveryMishlohaUrl = options.deliveryMishlohaUrl;
+  }
+  if (options.deliveryStatusConfirmedByAdmin !== undefined) {
+    data.deliveryStatusConfirmedByAdmin = options.deliveryStatusConfirmedByAdmin;
+  }
+  if (options.deliveryStatusCheckedAt !== undefined) {
+    data.deliveryStatusCheckedAt = options.deliveryStatusCheckedAt;
+  }
+
+  if (Object.keys(data).length === 0) return;
+
+  try {
+    await prisma.place.update({
+      where: { id: options.placeId },
+      data: data as never,
+    });
+    return;
+  } catch (err) {
+    console.warn("[places] prisma delivery status update failed, trying raw:", err);
+  }
+
   const sets: string[] = [];
   const params: unknown[] = [];
 
@@ -293,7 +331,12 @@ export async function updatePlaceDeliveryStatusSafe(options: {
     push(`"deliveryStatusConfirmedByAdmin" = ?`, options.deliveryStatusConfirmedByAdmin);
   }
   if (options.deliveryStatusCheckedAt !== undefined) {
-    push(`"deliveryStatusCheckedAt" = ?`, options.deliveryStatusCheckedAt);
+    push(
+      `"deliveryStatusCheckedAt" = ?`,
+      options.deliveryStatusCheckedAt
+        ? options.deliveryStatusCheckedAt.toISOString()
+        : null
+    );
   }
 
   if (sets.length === 0) return;
