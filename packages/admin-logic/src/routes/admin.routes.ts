@@ -37,6 +37,9 @@ async function ensureDeliveryAvailabilitySchema(): Promise<void> {
   `);
   await prisma.$executeRawUnsafe(`
     ALTER TABLE "Place"
+      ADD COLUMN IF NOT EXISTS "deliveryWoltUrl" TEXT,
+      ADD COLUMN IF NOT EXISTS "deliveryTenBisUrl" TEXT,
+      ADD COLUMN IF NOT EXISTS "deliveryMishlohaUrl" TEXT,
       ADD COLUMN IF NOT EXISTS "deliveryWoltStatus" "DeliveryAvailability" NOT NULL DEFAULT 'UNKNOWN',
       ADD COLUMN IF NOT EXISTS "deliveryTenBisStatus" "DeliveryAvailability" NOT NULL DEFAULT 'UNKNOWN',
       ADD COLUMN IF NOT EXISTS "deliveryMishlohaStatus" "DeliveryAvailability" NOT NULL DEFAULT 'UNKNOWN',
