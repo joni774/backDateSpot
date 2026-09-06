@@ -7,7 +7,7 @@ import {
   PriceRange,
   LeadType,
 } from "@datespot/database";
-import { placeCategorySchema, fetchPlaceImages, needsGooglePhoto, stockImageForCategory, persistPlacePhotoCache, FOOD_CATEGORIES, findPlacesSafe, materializePlaceImagesToCloudinary, isCloudinaryConfigured, isCloudinaryUrl, googlePlacesSleep, detectKosherFromText, isFoodPlace, updatePlaceKosherSafe } from "@datespot/places-logic";
+import { placeCategorySchema, fetchPlaceImages, needsGooglePhoto, stockImageForCategory, persistPlacePhotoCache, FOOD_CATEGORIES, findPlacesSafe, materializePlaceImagesToCloudinary, hasPersistablePhotoImages, isCloudinaryConfigured, isCloudinaryUrl, googlePlacesSleep, detectKosherFromText, isFoodPlace, updatePlaceKosherSafe } from "@datespot/places-logic";
 import { noopAdminCacheHooks, type AdminCacheHooks } from "../cache";
 import { createLeadBillingProcessor } from "../utils/lead-billing.util";
 
@@ -427,7 +427,7 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
             images: place.images,
           });
 
-          if (materialized.images.some(isCloudinaryUrl)) {
+          if (hasPersistablePhotoImages(materialized.images)) {
             await persistPlacePhotoCache({
               placeId: place.id,
               images: materialized.images,

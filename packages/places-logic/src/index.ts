@@ -35,6 +35,7 @@ export {
   persistPlacePhotoCache,
   materializeImagesToCloudinary,
   materializePlaceImagesToCloudinary,
+  hasPersistablePhotoImages,
   FOOD_CATEGORIES,
   type PlaceImageFetchResult,
 } from "./place-image-sources";
