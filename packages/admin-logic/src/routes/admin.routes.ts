@@ -7,7 +7,7 @@ import {
   PriceRange,
   LeadType,
 } from "@datespot/database";
-import { placeCategorySchema, fetchPlaceImages, needsGooglePhoto, stockImageForCategory, persistPlacePhotoCache, FOOD_CATEGORIES, findPlacesSafe, materializeImagesToCloudinary, isCloudinaryConfigured, isCloudinaryUrl } from "@datespot/places-logic";
+import { placeCategorySchema, fetchPlaceImages, needsGooglePhoto, stockImageForCategory, persistPlacePhotoCache, FOOD_CATEGORIES, findPlacesSafe, materializeImagesToCloudinary, isCloudinaryConfigured, isCloudinaryUrl, imageFetchSleep } from "@datespot/places-logic";
 import { noopAdminCacheHooks, type AdminCacheHooks } from "../cache";
 import { createLeadBillingProcessor } from "../utils/lead-billing.util";
 
@@ -108,6 +108,15 @@ const placeBodySchema = z.object({
   leadBillingEnabled: z.boolean().optional(),
   sponsoredUntil: optionalDateTime,
   sponsoredPriority: z.number().int().optional(),
+  kosherStatus: z.enum(["UNKNOWN", "NONE", "PARTIAL", "STRICT"]).optional(),
+  kosherCertification: z
+    .union([z.string().max(120), z.literal(""), z.null()])
+    .optional()
+    .transform((v) => {
+      if (v === undefined) return undefined;
+      if (!v || !String(v).trim()) return null;
+      return String(v).trim();
+    }),
 });
 
 const placeUpdateSchema = placeBodySchema.partial();
@@ -418,6 +427,7 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
           skipped += 1;
           details.push({ name: place.nameHe, result: "skipped" });
         }
+        await imageFetchSleep(250);
       }
 
       await cache.onPlacesMutated?.();

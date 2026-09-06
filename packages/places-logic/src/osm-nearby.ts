@@ -6,6 +6,12 @@ import {
 import { getDistanceKm } from "@datespot/utils";
 import type { PlacesListCache } from "./cache";
 import { classifyFoodName } from "./category-filter";
+import {
+  detectKosherFromOsmTag,
+  detectKosherFromText,
+  mergeKosherDetections,
+  type KosherDetection,
+} from "./kosher.util";
 
 const PHOTON_REVERSE_URL = "https://photon.komoot.io/reverse";
 const PHOTON_SEARCH_URL = "https://photon.komoot.io/api/";
@@ -28,6 +34,7 @@ type NearbyHit = {
   lng: number;
   address: string;
   category: PlaceCategory;
+  kosher: KosherDetection;
 };
 
 type PhotonFeature = {
@@ -129,6 +136,7 @@ function mapPhotonHits(
       lng,
       address,
       category: mapAmenityCategory(props.osm_value ?? "", name),
+      kosher: detectKosherFromText(name),
     });
   }
   return hits;
@@ -307,6 +315,10 @@ function elementToHit(element: OsmElement): NearbyHit | null {
     lng,
     address,
     category: mapOsmCategory(tags),
+    kosher: mergeKosherDetections(
+      detectKosherFromOsmTag(tags["diet:kosher"]),
+      detectKosherFromText(name, tags["name:en"], tags["name:he"])
+    ),
   };
 }
 
@@ -355,6 +367,10 @@ async function upsertHit(
   language: "he" | "en" | "ar"
 ): Promise<void> {
   const description = fallbackDescription(hit.nameHe, language);
+  const kosherFields =
+    hit.kosher.status !== "UNKNOWN"
+      ? { kosherStatus: hit.kosher.status, kosherCertification: hit.kosher.certification }
+      : {};
   await prisma.place.upsert({
     where: { googlePlaceId: hit.externalId },
     create: {
@@ -373,6 +389,7 @@ async function upsertHit(
       images: [],
       openingHours: {},
       displayOrder: 500,
+      ...kosherFields,
     },
     update: {
       nameHe: hit.nameHe,
@@ -383,6 +400,7 @@ async function upsertHit(
       address: hit.address,
       isActive: true,
       category: hit.category,
+      ...kosherFields,
     },
   });
 }

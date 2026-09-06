@@ -1,4 +1,5 @@
-import { prisma, PlaceCategory, PriceRange, type Place } from "@datespot/database";
+import { prisma, PlaceCategory, PriceRange, KosherStatus, type Place } from "@datespot/database";
+import { type KosherDetection } from "./kosher.util";
 
 const VALID_CATEGORIES = new Set<string>(Object.values(PlaceCategory));
 const VALID_PRICE_RANGES = new Set<string>(Object.values(PriceRange));
@@ -14,6 +15,14 @@ function normalizeCategory(value: unknown): PlaceCategory {
   const raw = String(value ?? "");
   if (VALID_CATEGORIES.has(raw)) return raw as PlaceCategory;
   return PlaceCategory.RESTAURANT;
+}
+
+const VALID_KOSHER_STATUSES = new Set(["UNKNOWN", "NONE", "PARTIAL", "STRICT"]);
+
+function normalizeKosherStatus(value: unknown): KosherStatus {
+  const raw = String(value ?? "UNKNOWN");
+  if (VALID_KOSHER_STATUSES.has(raw)) return raw as KosherStatus;
+  return KosherStatus.UNKNOWN;
 }
 
 function normalizePriceRange(value: unknown): PriceRange {
@@ -72,6 +81,9 @@ function mapRawPlaceRow(row: Record<string, unknown>): Place | null {
           : null,
     sponsoredPriority: Number(row.sponsoredPriority ?? 0),
     googlePlaceId: row.googlePlaceId == null ? null : String(row.googlePlaceId),
+    kosherStatus: normalizeKosherStatus(row.kosherStatus),
+    kosherCertification:
+      row.kosherCertification == null ? null : String(row.kosherCertification),
     createdAt:
       row.createdAt instanceof Date
         ? row.createdAt
@@ -176,6 +188,18 @@ export async function findPlacesByIdsSafe(ids: string[]): Promise<Place[]> {
 export async function incrementPlaceViewCountSafe(id: string): Promise<void> {
   await prisma.$executeRawUnsafe(
     `UPDATE "Place" SET "viewCount" = "viewCount" + 1 WHERE "id" = $1`,
+    id
+  );
+}
+
+export async function updatePlaceKosherSafe(
+  id: string,
+  detection: KosherDetection
+): Promise<void> {
+  await prisma.$executeRawUnsafe(
+    `UPDATE "Place" SET "kosherStatus" = $1::"KosherStatus", "kosherCertification" = $2 WHERE "id" = $3`,
+    detection.status,
+    detection.certification,
     id
   );
 }

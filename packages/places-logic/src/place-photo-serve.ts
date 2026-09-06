@@ -210,17 +210,11 @@ export async function servePlacePhotoByIndex(options: {
     });
     const fetchedCandidate = fetched.images[index] ?? fetched.images[0];
     if (await serveImageCandidate(res, fetchedCandidate, apiKey)) {
-      if (
-        place.images.length === 0 ||
-        isGenericPlaceholder(place.images) ||
-        storedRefs.length > 0
-      ) {
-        void persistPlacePhotoCache({
-          placeId: place.id,
-          images: fetched.images,
-          googlePlaceId: fetched.googlePlaceId,
-        }).catch(() => undefined);
-      }
+      void persistPlacePhotoCache({
+        placeId: place.id,
+        images: fetched.images,
+        googlePlaceId: fetched.googlePlaceId,
+      }).catch(() => undefined);
       return;
     }
 

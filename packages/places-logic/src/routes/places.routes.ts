@@ -16,8 +16,9 @@ import {
 import { ingestGoogleNearbyPlaces } from "../google-nearby";
 import { ingestOsmNearbyPlaces } from "../osm-nearby";
 import { attachGooglePhotosToPlaces } from "../place-image-sources";
-import { findPlaceByIdSafe, findPlacesByIdsSafe, findPlacesSafe, incrementPlaceViewCountSafe, updatePlaceOpeningHoursSafe } from "../place-query-safe";
+import { findPlaceByIdSafe, findPlacesByIdsSafe, findPlacesSafe, incrementPlaceViewCountSafe, updatePlaceOpeningHoursSafe, updatePlaceKosherSafe } from "../place-query-safe";
 import { placeMatchesCategory, prismaCategoryFilter } from "../category-filter";
+import { detectKosherFromText, isFoodPlace } from "../kosher.util";
 import {
   fetchGoogleOpeningHoursForBusiness,
   fetchGooglePhotoBuffer,
@@ -158,7 +159,19 @@ function mapPlaceListItem(
     longitude: place.longitude,
     address: place.address,
     phone: place.phone,
+    kosherStatus: place.kosherStatus,
+    kosherCertification: place.kosherCertification,
   };
+}
+
+async function ensureKosherEnriched(place: Place): Promise<Place> {
+  if (place.kosherStatus !== "UNKNOWN" || !isFoodPlace(place.category)) {
+    return place;
+  }
+  const detected = detectKosherFromText(place.nameHe, place.nameEn, place.nameAr);
+  if (detected.status === "UNKNOWN") return place;
+  await updatePlaceKosherSafe(place.id, detected);
+  return { ...place, kosherStatus: detected.status, kosherCertification: detected.certification };
 }
 
 export interface PlacesRouterConfig {
@@ -718,29 +731,31 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
         return;
       }
 
-      let openingHours = place.openingHours;
+      const enrichedPlace = await ensureKosherEnriched(place);
+
+      let openingHours = enrichedPlace.openingHours;
       if (!hasUsableOpeningHours(openingHours) && config.googlePlacesApiKey) {
         try {
           const enriched = await fetchGoogleOpeningHoursForBusiness({
             apiKey: config.googlePlacesApiKey,
-            googlePlaceId: place.googlePlaceId,
-            name: place.nameHe,
-            altName: place.nameEn,
-            lat: place.latitude,
-            lng: place.longitude,
+            googlePlaceId: enrichedPlace.googlePlaceId,
+            name: enrichedPlace.nameHe,
+            altName: enrichedPlace.nameEn,
+            lat: enrichedPlace.latitude,
+            lng: enrichedPlace.longitude,
           });
           if (enriched.hours) {
             openingHours = enriched.hours;
             await updatePlaceOpeningHoursSafe(id, enriched.hours);
           }
         } catch (err) {
-          console.warn(`[places] Google hours enrich failed for ${place.nameHe}:`, err);
+          console.warn(`[places] Google hours enrich failed for ${enrichedPlace.nameHe}:`, err);
         }
       }
 
       await incrementPlaceViewCountSafe(id);
 
-      const { name, description } = localizePlace(place, language);
+      const { name, description } = localizePlace(enrichedPlace, language);
       let isSaved = false;
       let isFavorite = false;
       if (req.user) {
@@ -763,30 +778,32 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
       });
 
       res.json({
-        id: place.id,
+        id: enrichedPlace.id,
         name,
         description,
-        nameHe: place.nameHe,
-        nameEn: place.nameEn,
-        nameAr: place.nameAr,
-        category: place.category,
-        latitude: place.latitude,
-        longitude: place.longitude,
-        address: place.address,
-        priceRange: place.priceRange,
-        images: resolvePlaceImageUrls(place.images, baseUrl, place.id),
+        nameHe: enrichedPlace.nameHe,
+        nameEn: enrichedPlace.nameEn,
+        nameAr: enrichedPlace.nameAr,
+        category: enrichedPlace.category,
+        latitude: enrichedPlace.latitude,
+        longitude: enrichedPlace.longitude,
+        address: enrichedPlace.address,
+        priceRange: enrichedPlace.priceRange,
+        images: resolvePlaceImageUrls(enrichedPlace.images, baseUrl, enrichedPlace.id),
         openingHours,
-        phone: place.phone,
-        website: place.website,
-        deliveryWoltUrl: place.deliveryWoltUrl,
-        deliveryTenBisUrl: place.deliveryTenBisUrl,
-        deliveryMishlohaUrl: place.deliveryMishlohaUrl,
-        deliveryCibusUrl: place.deliveryCibusUrl,
+        phone: enrichedPlace.phone,
+        website: enrichedPlace.website,
+        deliveryWoltUrl: enrichedPlace.deliveryWoltUrl,
+        deliveryTenBisUrl: enrichedPlace.deliveryTenBisUrl,
+        deliveryMishlohaUrl: enrichedPlace.deliveryMishlohaUrl,
+        deliveryCibusUrl: enrichedPlace.deliveryCibusUrl,
+        kosherStatus: enrichedPlace.kosherStatus,
+        kosherCertification: enrichedPlace.kosherCertification,
         isOpen: isPlaceOpenNow(openingHours),
-        isSponsored: isSponsoredActive(place),
+        isSponsored: isSponsoredActive(enrichedPlace),
         isSaved,
         isFavorite,
-        viewCount: place.viewCount + 1,
+        viewCount: enrichedPlace.viewCount + 1,
         averageRating: ratingAgg._avg.rating ?? null,
         reviewCount: ratingAgg._count.rating,
       });

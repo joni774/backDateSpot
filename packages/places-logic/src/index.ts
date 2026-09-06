@@ -41,7 +41,8 @@ export {
   isCloudinaryConfigured,
   isCloudinaryUrl,
 } from "./cloudinary-storage";
-export { findPlacesSafe, findPlaceByIdSafe, findPlacesByIdsSafe, incrementPlaceViewCountSafe, updatePlaceOpeningHoursSafe, updatePlacePhotoCacheSafe } from "./place-query-safe";
+export { findPlacesSafe, findPlaceByIdSafe, findPlacesByIdsSafe, incrementPlaceViewCountSafe, updatePlaceOpeningHoursSafe, updatePlacePhotoCacheSafe, updatePlaceKosherSafe } from "./place-query-safe";
+export { detectKosherFromText, detectKosherFromOsmTag, mergeKosherDetections, isFoodPlace, type KosherStatus, type KosherDetection } from "./kosher.util";
 export {
   stockImageForCategory,
   servePlacePhotoByIndex,

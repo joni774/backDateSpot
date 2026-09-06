@@ -33,6 +33,14 @@ enum PriceRange {
   EXPENSIVE
 }
 
+/// Kashrut status inferred from Google/OSM names and tags, or set manually in admin.
+enum KosherStatus {
+  UNKNOWN
+  NONE
+  PARTIAL
+  STRICT
+}
+
 // Lead type for business commission tracking (call / WhatsApp / website / delivery / navigation).
 enum LeadType {
   CALL
@@ -145,6 +153,10 @@ model Place {
   sponsoredPriority Int        @default(0)
   /// Google Places id when the row was ingested from Nearby Search.
   googlePlaceId  String?       @unique
+  /// Inferred from Google name / OSM diet:kosher or admin override.
+  kosherStatus       KosherStatus @default(UNKNOWN)
+  /// Specific cert label when known (e.g. בד"ץ, רבנות, מהדרין).
+  kosherCertification String?
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
   savedBy        SavedPlace[]

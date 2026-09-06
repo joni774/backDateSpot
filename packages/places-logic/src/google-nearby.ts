@@ -5,6 +5,7 @@ import {
 } from "@datespot/database";
 import type { PlacesListCache } from "./cache";
 import { encodeGooglePhotoRef } from "./google-places";
+import { detectKosherFromText, isFoodPlace } from "./kosher.util";
 
 const GOOGLE_NEARBY_URL = "https://maps.googleapis.com/maps/api/place/nearbysearch/json";
 const INGEST_TTL_SECONDS = 15 * 60;
@@ -180,6 +181,9 @@ async function upsertGooglePlace(
   const types = result.types ?? [];
   const address = result.vicinity?.trim() || name;
   const description = fallbackDescription(name, language);
+  const category = resolveCategory(types, requestedCategory);
+  const kosher =
+    isFoodPlace(category) ? detectKosherFromText(name) : { status: "UNKNOWN" as const, certification: null };
   const images = (result.photos ?? [])
     .slice(0, 3)
     .map((photo) => encodeGooglePhotoRef(photo.photo_reference));
@@ -195,7 +199,7 @@ async function upsertGooglePlace(
       descriptionHe: description,
       descriptionEn: description,
       descriptionAr: description,
-      category: resolveCategory(types, requestedCategory),
+      category,
       latitude: lat,
       longitude: lng,
       address,
@@ -203,6 +207,9 @@ async function upsertGooglePlace(
       images,
       openingHours: {},
       displayOrder: 500,
+      ...(kosher.status !== "UNKNOWN"
+        ? { kosherStatus: kosher.status, kosherCertification: kosher.certification }
+        : {}),
     },
     update: {
       nameHe: name,
@@ -213,6 +220,9 @@ async function upsertGooglePlace(
       address,
       priceRange: mapPrice(result.price_level),
       ...(images.length > 0 ? { images } : {}),
+      ...(kosher.status !== "UNKNOWN"
+        ? { kosherStatus: kosher.status, kosherCertification: kosher.certification }
+        : {}),
       isActive: true,
     },
   });
