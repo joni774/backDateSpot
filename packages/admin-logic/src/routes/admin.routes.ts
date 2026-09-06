@@ -11,6 +11,22 @@ import { placeCategorySchema, fetchPlaceImages, needsGooglePhoto, stockImageForC
 import { noopAdminCacheHooks, type AdminCacheHooks } from "../cache";
 import { createLeadBillingProcessor } from "../utils/lead-billing.util";
 
+/** Idempotent — safe when production DB missed the Prisma migration deploy. */
+async function ensureKosherSchema(): Promise<void> {
+  await prisma.$executeRawUnsafe(`
+    DO $$ BEGIN
+      CREATE TYPE "KosherStatus" AS ENUM ('UNKNOWN', 'NONE', 'PARTIAL', 'STRICT');
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$;
+  `);
+  await prisma.$executeRawUnsafe(`
+    ALTER TABLE "Place" ADD COLUMN IF NOT EXISTS "kosherStatus" "KosherStatus" NOT NULL DEFAULT 'UNKNOWN';
+  `);
+  await prisma.$executeRawUnsafe(`
+    ALTER TABLE "Place" ADD COLUMN IF NOT EXISTS "kosherCertification" TEXT;
+  `);
+}
+
 async function countPlacesByCategorySafe(): Promise<Record<PlaceCategory, number>> {
   const rows = await prisma.$queryRawUnsafe<Array<{ category: string; count: number }>>(
     `SELECT "category"::text AS category, COUNT(*)::int AS count FROM "Place" WHERE "isActive" = true GROUP BY "category"`
@@ -462,6 +478,7 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
 
   router.post("/enrich-kosher", async (_req, res) => {
     try {
+      await ensureKosherSchema();
       const places = await findPlacesSafe({ orderBy: { id: "asc" } });
       let updated = 0;
       let skipped = 0;
