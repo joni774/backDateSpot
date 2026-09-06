@@ -27,6 +27,55 @@ async function ensureKosherSchema(): Promise<void> {
   `);
 }
 
+/** Idempotent delivery availability columns + Cibus purge leftovers. */
+async function ensureDeliveryAvailabilitySchema(): Promise<void> {
+  await prisma.$executeRawUnsafe(`
+    DO $$ BEGIN
+      CREATE TYPE "DeliveryAvailability" AS ENUM ('UNKNOWN', 'AVAILABLE', 'NOT_AVAILABLE');
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$;
+  `);
+  await prisma.$executeRawUnsafe(`
+    ALTER TABLE "Place"
+      ADD COLUMN IF NOT EXISTS "deliveryWoltStatus" "DeliveryAvailability" NOT NULL DEFAULT 'UNKNOWN',
+      ADD COLUMN IF NOT EXISTS "deliveryTenBisStatus" "DeliveryAvailability" NOT NULL DEFAULT 'UNKNOWN',
+      ADD COLUMN IF NOT EXISTS "deliveryMishlohaStatus" "DeliveryAvailability" NOT NULL DEFAULT 'UNKNOWN',
+      ADD COLUMN IF NOT EXISTS "deliveryStatusCheckedAt" TIMESTAMP(3),
+      ADD COLUMN IF NOT EXISTS "deliveryStatusConfirmedByAdmin" BOOLEAN NOT NULL DEFAULT false;
+  `);
+  await prisma.$executeRawUnsafe(`
+    ALTER TABLE "Place" DROP COLUMN IF EXISTS "deliveryCibusUrl";
+  `);
+  await prisma.$executeRawUnsafe(`
+    DELETE FROM "PlaceLead" WHERE "type"::text = 'DELIVERY_CIBUS';
+  `);
+  // Backfill existing URLs as AVAILABLE (safe to re-run)
+  await prisma.$executeRawUnsafe(`
+    UPDATE "Place"
+    SET
+      "deliveryWoltStatus" = CASE
+        WHEN "deliveryWoltUrl" IS NOT NULL AND TRIM("deliveryWoltUrl") <> '' THEN 'AVAILABLE'::"DeliveryAvailability"
+        ELSE "deliveryWoltStatus"
+      END,
+      "deliveryTenBisStatus" = CASE
+        WHEN "deliveryTenBisUrl" IS NOT NULL AND TRIM("deliveryTenBisUrl") <> '' THEN 'AVAILABLE'::"DeliveryAvailability"
+        ELSE "deliveryTenBisStatus"
+      END,
+      "deliveryMishlohaStatus" = CASE
+        WHEN "deliveryMishlohaUrl" IS NOT NULL AND TRIM("deliveryMishlohaUrl") <> '' THEN 'AVAILABLE'::"DeliveryAvailability"
+        ELSE "deliveryMishlohaStatus"
+      END,
+      "deliveryStatusConfirmedByAdmin" = CASE
+        WHEN
+          ("deliveryWoltUrl" IS NOT NULL AND TRIM("deliveryWoltUrl") <> '')
+          OR ("deliveryTenBisUrl" IS NOT NULL AND TRIM("deliveryTenBisUrl") <> '')
+          OR ("deliveryMishlohaUrl" IS NOT NULL AND TRIM("deliveryMishlohaUrl") <> '')
+        THEN true
+        ELSE "deliveryStatusConfirmedByAdmin"
+      END;
+  `);
+}
+
 type KosherEnrichRow = {
   id: string;
   nameHe: string;
@@ -557,6 +606,7 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
 
   router.post("/places/:id/delivery-check", async (req, res) => {
     try {
+      await ensureDeliveryAvailabilitySchema();
       const id = z.string().uuid().parse(req.params.id);
       const place = await findPlaceByIdSafe(id);
       if (!place) {
@@ -585,6 +635,7 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
 
   router.post("/delivery-check", async (req, res) => {
     try {
+      await ensureDeliveryAvailabilitySchema();
       const limit = Math.min(
         25,
         Math.max(1, parseInt(String(req.body?.limit ?? req.query.limit ?? "10"), 10))
