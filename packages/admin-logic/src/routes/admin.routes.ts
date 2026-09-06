@@ -25,7 +25,22 @@ async function ensureKosherSchema(): Promise<void> {
   await prisma.$executeRawUnsafe(`
     ALTER TABLE "Place" ADD COLUMN IF NOT EXISTS "kosherCertification" TEXT;
   `);
-  await prisma.$executeRawUnsafe(`DEALLOCATE ALL`);
+}
+
+type KosherEnrichRow = {
+  id: string;
+  nameHe: string;
+  nameEn: string;
+  nameAr: string;
+  category: string;
+  kosherStatus: string | null;
+};
+
+async function loadPlacesForKosherEnrich(): Promise<KosherEnrichRow[]> {
+  return prisma.$queryRawUnsafe<KosherEnrichRow[]>(
+    `SELECT id, "nameHe", "nameEn", "nameAr", "category"::text AS category, "kosherStatus"::text AS "kosherStatus"
+     FROM "Place" WHERE "isActive" = true ORDER BY id`
+  );
 }
 
 async function countPlacesByCategorySafe(): Promise<Record<PlaceCategory, number>> {
@@ -480,7 +495,7 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
   router.post("/enrich-kosher", async (_req, res) => {
     try {
       await ensureKosherSchema();
-      const places = await findPlacesSafe({ orderBy: { id: "asc" } });
+      const places = await loadPlacesForKosherEnrich();
       let updated = 0;
       let skipped = 0;
       const details: Array<{ name: string; status: string; certification: string | null }> = [];
