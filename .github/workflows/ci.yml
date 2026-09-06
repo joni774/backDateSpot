@@ -1,0 +1,38 @@
+name: CI
+
+# מדיניות ענפים: PR מענף פיצ'ר אל develop מריץ CI בלבד (ללא E2E).
+# ראו .cursor/rules/git-branching-workflow.mdc בתיקיית ה-workspace הראשית.
+on:
+  pull_request:
+    branches: [develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Build
+        run: pnpm build
