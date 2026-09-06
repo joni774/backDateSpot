@@ -7,7 +7,7 @@ import {
   PriceRange,
   LeadType,
 } from "@datespot/database";
-import { placeCategorySchema, fetchPlaceImages, needsGooglePhoto, stockImageForCategory, persistPlacePhotoCache, FOOD_CATEGORIES, findPlacesSafe, materializePlaceImagesToCloudinary, isCloudinaryConfigured, isCloudinaryUrl, googlePlacesSleep } from "@datespot/places-logic";
+import { placeCategorySchema, fetchPlaceImages, needsGooglePhoto, stockImageForCategory, persistPlacePhotoCache, FOOD_CATEGORIES, findPlacesSafe, materializePlaceImagesToCloudinary, isCloudinaryConfigured, isCloudinaryUrl, googlePlacesSleep, detectKosherFromText, isFoodPlace, updatePlaceKosherSafe } from "@datespot/places-logic";
 import { noopAdminCacheHooks, type AdminCacheHooks } from "../cache";
 import { createLeadBillingProcessor } from "../utils/lead-billing.util";
 
@@ -457,6 +457,46 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: "Failed to enrich photos" });
+    }
+  });
+
+  router.post("/enrich-kosher", async (_req, res) => {
+    try {
+      const places = await findPlacesSafe({ orderBy: { id: "asc" } });
+      let updated = 0;
+      let skipped = 0;
+      const details: Array<{ name: string; status: string; certification: string | null }> = [];
+
+      for (const place of places) {
+        if (place.kosherStatus !== "UNKNOWN" || !isFoodPlace(place.category)) {
+          skipped += 1;
+          continue;
+        }
+        const detected = detectKosherFromText(place.nameHe, place.nameEn, place.nameAr);
+        if (detected.status === "UNKNOWN") {
+          skipped += 1;
+          continue;
+        }
+        await updatePlaceKosherSafe(place.id, detected);
+        updated += 1;
+        details.push({
+          name: place.nameHe,
+          status: detected.status,
+          certification: detected.certification,
+        });
+      }
+
+      await cache.onPlacesMutated?.();
+
+      res.json({
+        totalPlaces: places.length,
+        updated,
+        skipped,
+        details: details.slice(0, 50),
+      });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Failed to enrich kosher status" });
     }
   });
 
