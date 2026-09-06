@@ -12,7 +12,7 @@ const MAX_MATCH_KM = 0.35;
 const TIGHT_MATCH_KM = 0.1;
 const SEARCH_RADIUS_M = 250;
 /** Minimum fuzzy name score (0–40) to accept a nearby POI for OSM-imported rows. */
-const MIN_FUZZY_SCORE = 22;
+const MIN_FUZZY_SCORE = 18;
 
 const NEARBY_FOOD_TYPES = ["restaurant", "cafe", "bar", "bakery", "meal_takeaway"] as const;
 
@@ -420,7 +420,7 @@ async function lookupPhotosByName(
   const bias = `circle:${SEARCH_RADIUS_M}@${lat},${lng}`;
   const candidates: PhotoCandidate[] = [];
 
-  for (const query of searchQueries.slice(0, 8)) {
+  for (const query of searchQueries.slice(0, 4)) {
     const encodedQuery = encodeURIComponent(query);
     const findUrl =
       "https://maps.googleapis.com/maps/api/place/findplacefromtext/json?" +
@@ -444,7 +444,7 @@ async function lookupPhotosByName(
     }
   }
 
-  for (const query of searchQueries.slice(0, 4)) {
+  for (const query of searchQueries.slice(0, 2)) {
     const encodedName = encodeURIComponent(query);
     const nearbyUrl =
       "https://maps.googleapis.com/maps/api/place/nearbysearch/json?" +
@@ -456,7 +456,7 @@ async function lookupPhotosByName(
     }
   }
 
-  for (const nearbyType of NEARBY_FOOD_TYPES) {
+  for (const nearbyType of NEARBY_FOOD_TYPES.slice(0, 3)) {
     const nearbyFoodUrl =
       "https://maps.googleapis.com/maps/api/place/nearbysearch/json?" +
       `location=${lat},${lng}&radius=${SEARCH_RADIUS_M}&type=${nearbyType}&key=${apiKey}`;
@@ -488,26 +488,19 @@ export async function fetchGooglePlacePhotoRefs(
   address?: string
 ): Promise<{ placeId?: string; refs: string[] }> {
   const expectedNames = expandExpectedNames(name, altName, address);
-  const queryNames = expectedNames.length > 0 ? expectedNames : [name];
+  const primaryName = expectedNames[0] ?? name;
 
-  let placeId: string | undefined;
-  let refs: string[] = [];
+  const found = await lookupPhotosByName(
+    primaryName,
+    lat,
+    lng,
+    apiKey,
+    expectedNames,
+    address
+  );
 
-  for (const queryName of queryNames) {
-    const found = await lookupPhotosByName(
-      queryName,
-      lat,
-      lng,
-      apiKey,
-      expectedNames,
-      address
-    );
-    if (found.placeId) {
-      placeId = found.placeId;
-      refs = found.refs;
-      break;
-    }
-  }
+  let placeId = found.placeId;
+  let refs = found.refs;
 
   if (placeId && refs.length < 3) {
     const detailRefs = await fetchGooglePlacePhotoRefsByPlaceId(placeId, apiKey);

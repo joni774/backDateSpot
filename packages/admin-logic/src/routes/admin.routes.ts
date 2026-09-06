@@ -371,7 +371,7 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
 
   router.post("/enrich-photos", async (req, res) => {
     try {
-      const limit = Math.min(60, Math.max(1, parseInt(String(req.body?.limit ?? req.query.limit ?? "20"), 10)));
+      const limit = Math.min(15, Math.max(1, parseInt(String(req.body?.limit ?? req.query.limit ?? "10"), 10)));
       const offset = Math.max(0, parseInt(String(req.body?.offset ?? req.query.offset ?? "0"), 10));
 
       const places = await findPlacesSafe({ orderBy: { id: "asc" } });
