@@ -7,7 +7,7 @@ import {
   PriceRange,
   LeadType,
 } from "@datespot/database";
-import { placeCategorySchema, fetchPlaceImages, needsGooglePhoto, stockImageForCategory, persistPlacePhotoCache, FOOD_CATEGORIES, findPlacesSafe, materializeImagesToCloudinary, isCloudinaryConfigured, isCloudinaryUrl, imageFetchSleep } from "@datespot/places-logic";
+import { placeCategorySchema, fetchPlaceImages, needsGooglePhoto, stockImageForCategory, persistPlacePhotoCache, FOOD_CATEGORIES, findPlacesSafe, materializeImagesToCloudinary, isCloudinaryConfigured, isCloudinaryUrl, googlePlacesSleep } from "@datespot/places-logic";
 import { noopAdminCacheHooks, type AdminCacheHooks } from "../cache";
 import { createLeadBillingProcessor } from "../utils/lead-billing.util";
 
@@ -427,7 +427,7 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
           skipped += 1;
           details.push({ name: place.nameHe, result: "skipped" });
         }
-        await imageFetchSleep(250);
+        await googlePlacesSleep(250);
       }
 
       await cache.onPlacesMutated?.();
