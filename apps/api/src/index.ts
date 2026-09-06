@@ -10,6 +10,7 @@ import helmet from "helmet";
 import morgan from "morgan";
 import os from "os";
 import { prisma } from "@datespot/database";
+import { getGooglePlacesApiKey, isCloudinaryConfigured } from "@datespot/places-logic";
 import { env } from "./config/env";
 import authRoutes from "./routes/auth.routes";
 import placesRoutes from "./routes/places.routes";
@@ -53,15 +54,8 @@ app.get("/health", async (_req, res) => {
       process.env.GIT_COMMIT?.slice(0, 7) ??
       "dev",
     placesQueryOk,
-    cloudinaryConfigured: Boolean(
-      process.env.CLOUDINARY_CLOUD_NAME?.trim() &&
-        process.env.CLOUDINARY_API_KEY?.trim() &&
-        process.env.CLOUDINARY_API_SECRET?.trim()
-    ),
-    googlePlacesKeyConfigured: Boolean(
-      process.env.GOOGLE_PLACES_API_KEY?.trim() ||
-        process.env.GOOGLE_MAPS_API_KEY?.trim()
-    ),
+    cloudinaryConfigured: isCloudinaryConfigured(),
+    googlePlacesKeyConfigured: Boolean(getGooglePlacesApiKey()),
   });
 });
 

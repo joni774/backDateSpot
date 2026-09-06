@@ -403,16 +403,21 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
 
   router.post("/enrich-photos", async (req, res) => {
     try {
-      const limit = Math.min(15, Math.max(1, parseInt(String(req.body?.limit ?? req.query.limit ?? "10"), 10)));
+      const limit = Math.min(25, Math.max(1, parseInt(String(req.body?.limit ?? req.query.limit ?? "10"), 10)));
       const offset = Math.max(0, parseInt(String(req.body?.offset ?? req.query.offset ?? "0"), 10));
+      const foodOnly =
+        String(req.body?.foodOnly ?? req.query.foodOnly ?? "false").toLowerCase() === "true";
 
       const places = await findPlacesSafe({ orderBy: { id: "asc" } });
-      const slice = places.slice(offset, offset + limit);
-      const pending = slice.filter((place) => needsGooglePhoto(place.images));
+      const candidates = places.filter((place) => {
+        if (foodOnly && !FOOD_CATEGORIES.has(place.category)) return false;
+        return needsGooglePhoto(place.images);
+      });
+      const pending = candidates.slice(offset, offset + limit);
 
       let updated = 0;
       let skipped = 0;
-      const details: Array<{ name: string; result: "updated" | "skipped" }> = [];
+      const details: Array<{ name: string; result: "updated" | "skipped"; reason?: string }> = [];
 
       for (const place of pending) {
         try {
@@ -427,14 +432,16 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
             images: place.images,
           });
 
-          if (hasPersistablePhotoImages(materialized.images)) {
+          // Only Cloudinary counts as durable success — gpl: alone is not done.
+          if (materialized.images.some(isCloudinaryUrl)) {
             await persistPlacePhotoCache({
               placeId: place.id,
               images: materialized.images,
               googlePlaceId: materialized.googlePlaceId ?? place.googlePlaceId ?? undefined,
             });
             updated += 1;
-            details.push({ name: place.nameHe, result: "updated" });
+            details.push({ name: place.nameHe, result: "updated", reason: "cloudinary" });
+            await googlePlacesSleep(250);
             continue;
           }
 
@@ -450,7 +457,8 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
 
           if (fetched.images.length === 0) {
             skipped += 1;
-            details.push({ name: place.nameHe, result: "skipped" });
+            details.push({ name: place.nameHe, result: "skipped", reason: "no_source" });
+            await googlePlacesSleep(250);
             continue;
           }
 
@@ -459,31 +467,69 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
             images: fetched.images,
             googlePlaceId: fetched.googlePlaceId,
           });
-          updated += 1;
-          details.push({ name: place.nameHe, result: "updated" });
+
+          // persistPlacePhotoCache materializes; treat http(s) non-gpl as usable too.
+          const durable =
+            fetched.images.some(isCloudinaryUrl) ||
+            fetched.images.some(
+              (url) => /^https?:\/\//i.test(url) && !url.startsWith("gpl:")
+            );
+          if (durable || hasPersistablePhotoImages(fetched.images)) {
+            // Re-materialize once to prefer Cloudinary URLs in DB when possible.
+            const uploaded = await materializePlaceImagesToCloudinary({
+              id: place.id,
+              nameHe: place.nameHe,
+              nameEn: place.nameEn,
+              latitude: place.latitude,
+              longitude: place.longitude,
+              address: place.address,
+              googlePlaceId: fetched.googlePlaceId ?? place.googlePlaceId,
+              images: fetched.images,
+            });
+            if (uploaded.images.some(isCloudinaryUrl)) {
+              await persistPlacePhotoCache({
+                placeId: place.id,
+                images: uploaded.images,
+                googlePlaceId: uploaded.googlePlaceId ?? fetched.googlePlaceId,
+              });
+              updated += 1;
+              details.push({ name: place.nameHe, result: "updated", reason: "fetched_cloudinary" });
+            } else if (fetched.images.some((url) => /^https?:\/\//i.test(url))) {
+              updated += 1;
+              details.push({ name: place.nameHe, result: "updated", reason: "fetched_https" });
+            } else {
+              skipped += 1;
+              details.push({ name: place.nameHe, result: "skipped", reason: "still_gpl" });
+            }
+          } else {
+            skipped += 1;
+            details.push({ name: place.nameHe, result: "skipped", reason: "not_durable" });
+          }
         } catch (err) {
           console.warn(`[admin] enrich-photos failed for ${place.nameHe}:`, err);
           skipped += 1;
-          details.push({ name: place.nameHe, result: "skipped" });
+          details.push({ name: place.nameHe, result: "skipped", reason: "error" });
         }
         await googlePlacesSleep(250);
       }
 
       await cache.onPlacesMutated?.();
 
-      const stillNeeding = places.filter((place) => needsGooglePhoto(place.images)).length - updated;
       const nextOffset = offset + limit;
 
       res.json({
         totalPlaces: places.length,
+        candidates: candidates.length,
+        foodOnly,
+        cloudinaryConfigured: isCloudinaryConfigured(),
         offset,
         nextOffset,
-        done: nextOffset >= places.length,
-        sliceSize: slice.length,
+        done: nextOffset >= candidates.length,
+        sliceSize: pending.length,
         candidatesInSlice: pending.length,
         updated,
         skipped,
-        stillNeedingPhotos: Math.max(0, stillNeeding),
+        stillNeedingPhotos: Math.max(0, candidates.length - updated),
         details,
       });
     } catch (err) {
