@@ -294,6 +294,50 @@ export async function materializeImagesToCloudinary(
   return out.length > 0 ? out : images;
 }
 
+/** Refresh expired Google refs when needed, then upload to Cloudinary. */
+export async function materializePlaceImagesToCloudinary(place: {
+  id: string;
+  nameHe: string;
+  nameEn: string;
+  latitude: number;
+  longitude: number;
+  address: string;
+  googlePlaceId?: string | null;
+  images: string[];
+}): Promise<{ images: string[]; googlePlaceId?: string }> {
+  const apiKey = getGooglePlacesApiKey();
+  let images = await materializeImagesToCloudinary(place.id, place.images, apiKey);
+  if (images.some(isCloudinaryUrl)) {
+    return { images };
+  }
+
+  const hasStaleGpl = place.images.some((image) => decodeGooglePhotoRef(image));
+  if (!apiKey || (!hasStaleGpl && !needsGooglePhoto(place.images))) {
+    return { images };
+  }
+
+  const resolved = await resolveGooglePlacePhotos({
+    apiKey,
+    nameHe: place.nameHe,
+    nameEn: place.nameEn,
+    lat: place.latitude,
+    lng: place.longitude,
+    googlePlaceId: isRealGooglePlaceId(place.googlePlaceId) ? place.googlePlaceId : null,
+    address: place.address,
+  });
+
+  if (resolved.refs.length === 0) {
+    return { images };
+  }
+
+  const refreshed = resolved.refs.map(encodeGooglePhotoRef);
+  images = await materializeImagesToCloudinary(place.id, refreshed, apiKey);
+  return {
+    images,
+    googlePlaceId: resolved.googlePlaceId,
+  };
+}
+
 export type PlaceImageFetchResult = {
   images: string[];
   googlePlaceId?: string;
