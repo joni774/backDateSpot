@@ -7,7 +7,7 @@ import {
   PriceRange,
   LeadType,
 } from "@datespot/database";
-import { placeCategorySchema, fetchPlaceImages, needsGooglePhoto, stockImageForCategory, persistPlacePhotoCache, FOOD_CATEGORIES, findPlacesSafe, materializePlaceImagesToCloudinary, hasPersistablePhotoImages, isCloudinaryConfigured, isCloudinaryUrl, googlePlacesSleep, detectKosherFromText, isFoodPlace, updatePlaceKosherSafe } from "@datespot/places-logic";
+import { placeCategorySchema, fetchPlaceImages, needsGooglePhoto, stockImageForCategory, persistPlacePhotoCache, FOOD_CATEGORIES, findPlacesSafe, findPlaceByIdSafe, materializePlaceImagesToCloudinary, hasPersistablePhotoImages, isCloudinaryConfigured, isCloudinaryUrl, googlePlacesSleep, detectKosherFromText, isFoodPlace, updatePlaceKosherSafe, checkDeliveryAvailabilityForPlace, persistDeliveryCheckResult, placeNeedsDeliveryCheck, isFoodDeliveryCategory } from "@datespot/places-logic";
 import { noopAdminCacheHooks, type AdminCacheHooks } from "../cache";
 import { createLeadBillingProcessor } from "../utils/lead-billing.util";
 
@@ -125,7 +125,10 @@ const placeBodySchema = z.object({
   deliveryWoltUrl: optionalUrl,
   deliveryTenBisUrl: optionalUrl,
   deliveryMishlohaUrl: optionalUrl,
-  deliveryCibusUrl: optionalUrl,
+  deliveryWoltStatus: z.enum(["UNKNOWN", "AVAILABLE", "NOT_AVAILABLE"]).optional(),
+  deliveryTenBisStatus: z.enum(["UNKNOWN", "AVAILABLE", "NOT_AVAILABLE"]).optional(),
+  deliveryMishlohaStatus: z.enum(["UNKNOWN", "AVAILABLE", "NOT_AVAILABLE"]).optional(),
+  deliveryStatusConfirmedByAdmin: z.boolean().optional(),
   isActive: z.boolean().optional(),
   displayOrder: z.number().int().optional(),
   leadFeeAgorot: z.number().int().min(0).optional(),
@@ -263,7 +266,21 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
         return;
       }
 
-      const place = await prisma.place.update({ where: { id }, data: body });
+      const confirmingDelivery =
+        body.deliveryWoltStatus != null ||
+        body.deliveryTenBisStatus != null ||
+        body.deliveryMishlohaStatus != null ||
+        body.deliveryStatusConfirmedByAdmin === true;
+
+      const place = await prisma.place.update({
+        where: { id },
+        data: {
+          ...body,
+          ...(confirmingDelivery
+            ? { deliveryStatusConfirmedByAdmin: true }
+            : {}),
+        },
+      });
       await cache.onPlacesMutated?.();
       res.json(place);
     } catch (err) {
@@ -535,6 +552,104 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: "Failed to enrich photos" });
+    }
+  });
+
+  router.post("/places/:id/delivery-check", async (req, res) => {
+    try {
+      const id = z.string().uuid().parse(req.params.id);
+      const place = await findPlaceByIdSafe(id);
+      if (!place) {
+        res.status(404).json({ error: "Place not found" });
+        return;
+      }
+
+      const result = await checkDeliveryAvailabilityForPlace(place);
+      await persistDeliveryCheckResult(place.id, result);
+      await cache.onPlacesMutated?.();
+
+      const refreshed = await findPlaceByIdSafe(id);
+      res.json({ place: refreshed, result });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        res.status(400).json({ error: "Invalid place id" });
+        return;
+      }
+      console.error(err);
+      res.status(500).json({ error: "Failed to check delivery availability" });
+    }
+  });
+
+  router.post("/delivery-check", async (req, res) => {
+    try {
+      const limit = Math.min(
+        25,
+        Math.max(1, parseInt(String(req.body?.limit ?? req.query.limit ?? "10"), 10))
+      );
+      const offset = Math.max(
+        0,
+        parseInt(String(req.body?.offset ?? req.query.offset ?? "0"), 10)
+      );
+      const foodOnly =
+        String(req.body?.foodOnly ?? req.query.foodOnly ?? "true").toLowerCase() !==
+        "false";
+      const onlyUnknown =
+        String(req.body?.onlyUnknown ?? req.query.onlyUnknown ?? "true").toLowerCase() !==
+        "false";
+
+      const places = await findPlacesSafe({ orderBy: { id: "asc" } });
+      const candidates = places.filter((place) => {
+        if (foodOnly && !isFoodDeliveryCategory(place.category)) return false;
+        if (onlyUnknown) return placeNeedsDeliveryCheck(place);
+        return isFoodDeliveryCategory(place.category);
+      });
+      const pending = candidates.slice(offset, offset + limit);
+
+      let updated = 0;
+      let skipped = 0;
+      const details: Array<{
+        name: string;
+        wolt: string;
+        tenbis: string;
+        mishloha: string;
+      }> = [];
+
+      for (const place of pending) {
+        try {
+          const result = await checkDeliveryAvailabilityForPlace(place);
+          await persistDeliveryCheckResult(place.id, result);
+          updated += 1;
+          details.push({
+            name: place.nameHe,
+            wolt: result.wolt.status,
+            tenbis: result.tenbis.status,
+            mishloha: result.mishloha.status,
+          });
+        } catch (err) {
+          console.warn(`[admin] delivery-check failed for ${place.nameHe}:`, err);
+          skipped += 1;
+        }
+        await googlePlacesSleep(200);
+      }
+
+      await cache.onPlacesMutated?.();
+      const nextOffset = offset + limit;
+      res.json({
+        totalPlaces: places.length,
+        candidates: candidates.length,
+        foodOnly,
+        onlyUnknown,
+        offset,
+        nextOffset,
+        done: nextOffset >= candidates.length,
+        sliceSize: pending.length,
+        updated,
+        skipped,
+        details,
+      });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Failed to batch-check delivery availability" });
     }
   });
 

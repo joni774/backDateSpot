@@ -25,6 +25,10 @@ import {
   resolvePlaceImageUrls,
 } from "../google-places";
 import { servePlacePhotoByIndex } from "../place-photo-serve";
+import {
+  isFoodDeliveryCategory,
+  resolveDeliveryProviders,
+} from "../delivery-availability";
 import { placeCategorySchema } from "../schemas/place.schema";
 import {
   hasUsableOpeningHours,
@@ -143,6 +147,9 @@ function mapPlaceListItem(
   baseUrl?: string
 ) {
   const { name, description } = localizePlace(place, language);
+  const delivery = isFoodDeliveryCategory(place.category)
+    ? resolveDeliveryProviders(place)
+    : undefined;
   return {
     id: place.id,
     name,
@@ -161,6 +168,17 @@ function mapPlaceListItem(
     phone: place.phone,
     kosherStatus: place.kosherStatus,
     kosherCertification: place.kosherCertification,
+    ...(delivery
+      ? {
+          delivery,
+          deliveryWoltUrl: delivery.wolt.available ? delivery.wolt.url : null,
+          deliveryTenBisUrl: delivery.tenbis.available ? delivery.tenbis.url : null,
+          deliveryMishlohaUrl: delivery.mishloha.available ? delivery.mishloha.url : null,
+          deliveryWoltStatus: delivery.wolt.status,
+          deliveryTenBisStatus: delivery.tenbis.status,
+          deliveryMishlohaStatus: delivery.mishloha.status,
+        }
+      : {}),
   };
 }
 
@@ -793,10 +811,13 @@ export function createPlacesRouter(config: PlacesRouterConfig): Router {
         openingHours,
         phone: enrichedPlace.phone,
         website: enrichedPlace.website,
+        delivery: resolveDeliveryProviders(enrichedPlace),
         deliveryWoltUrl: enrichedPlace.deliveryWoltUrl,
         deliveryTenBisUrl: enrichedPlace.deliveryTenBisUrl,
         deliveryMishlohaUrl: enrichedPlace.deliveryMishlohaUrl,
-        deliveryCibusUrl: enrichedPlace.deliveryCibusUrl,
+        deliveryWoltStatus: enrichedPlace.deliveryWoltStatus,
+        deliveryTenBisStatus: enrichedPlace.deliveryTenBisStatus,
+        deliveryMishlohaStatus: enrichedPlace.deliveryMishlohaStatus,
         kosherStatus: enrichedPlace.kosherStatus,
         kosherCertification: enrichedPlace.kosherCertification,
         isOpen: isPlaceOpenNow(openingHours),
