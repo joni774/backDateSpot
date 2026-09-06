@@ -25,6 +25,7 @@ async function ensureKosherSchema(): Promise<void> {
   await prisma.$executeRawUnsafe(`
     ALTER TABLE "Place" ADD COLUMN IF NOT EXISTS "kosherCertification" TEXT;
   `);
+  await prisma.$executeRawUnsafe(`DEALLOCATE ALL`);
 }
 
 async function countPlacesByCategorySafe(): Promise<Record<PlaceCategory, number>> {
