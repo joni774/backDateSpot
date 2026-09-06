@@ -6,9 +6,8 @@ import {
   SubscriptionTier,
   PriceRange,
   LeadType,
-  KosherStatus,
 } from "@datespot/database";
-import { placeCategorySchema, fetchPlaceImages, needsGooglePhoto, stockImageForCategory, persistPlacePhotoCache, FOOD_CATEGORIES, findPlacesSafe, materializePlaceImagesToCloudinary, isCloudinaryConfigured, isCloudinaryUrl, googlePlacesSleep, detectKosherFromText, isFoodPlace } from "@datespot/places-logic";
+import { placeCategorySchema, fetchPlaceImages, needsGooglePhoto, stockImageForCategory, persistPlacePhotoCache, FOOD_CATEGORIES, findPlacesSafe, materializePlaceImagesToCloudinary, isCloudinaryConfigured, isCloudinaryUrl, googlePlacesSleep, detectKosherFromText, isFoodPlace, updatePlaceKosherSafe } from "@datespot/places-logic";
 import { noopAdminCacheHooks, type AdminCacheHooks } from "../cache";
 import { createLeadBillingProcessor } from "../utils/lead-billing.util";
 
@@ -478,13 +477,7 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
           skipped += 1;
           continue;
         }
-        await prisma.place.update({
-          where: { id: place.id },
-          data: {
-            kosherStatus: detected.status as KosherStatus,
-            kosherCertification: detected.certification,
-          },
-        });
+        await updatePlaceKosherSafe(place.id, detected);
         updated += 1;
         details.push({
           name: place.nameHe,
