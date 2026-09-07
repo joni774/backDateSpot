@@ -260,38 +260,39 @@ export async function updatePlaceDeliveryStatusSafe(options: {
   deliveryStatusConfirmedByAdmin?: boolean;
   deliveryStatusCheckedAt?: Date | null;
 }): Promise<void> {
-  const data: Record<string, unknown> = {};
-  if (options.deliveryWoltStatus != null) {
-    data.deliveryWoltStatus = String(options.deliveryWoltStatus);
-  }
-  if (options.deliveryTenBisStatus != null) {
-    data.deliveryTenBisStatus = String(options.deliveryTenBisStatus);
-  }
-  if (options.deliveryMishlohaStatus != null) {
-    data.deliveryMishlohaStatus = String(options.deliveryMishlohaStatus);
-  }
-  if (options.deliveryWoltUrl !== undefined) {
-    data.deliveryWoltUrl = options.deliveryWoltUrl;
-  }
-  if (options.deliveryTenBisUrl !== undefined) {
-    data.deliveryTenBisUrl = options.deliveryTenBisUrl;
-  }
-  if (options.deliveryMishlohaUrl !== undefined) {
-    data.deliveryMishlohaUrl = options.deliveryMishlohaUrl;
-  }
-  if (options.deliveryStatusConfirmedByAdmin !== undefined) {
-    data.deliveryStatusConfirmedByAdmin = options.deliveryStatusConfirmedByAdmin;
-  }
-  if (options.deliveryStatusCheckedAt !== undefined) {
-    data.deliveryStatusCheckedAt = options.deliveryStatusCheckedAt;
-  }
-
-  if (Object.keys(data).length === 0) return;
-
   try {
     await prisma.place.update({
       where: { id: options.placeId },
-      data: data as never,
+      data: {
+        ...(options.deliveryWoltStatus != null
+          ? { deliveryWoltStatus: String(options.deliveryWoltStatus) as DeliveryAvailability }
+          : {}),
+        ...(options.deliveryTenBisStatus != null
+          ? { deliveryTenBisStatus: String(options.deliveryTenBisStatus) as DeliveryAvailability }
+          : {}),
+        ...(options.deliveryMishlohaStatus != null
+          ? {
+              deliveryMishlohaStatus: String(
+                options.deliveryMishlohaStatus
+              ) as DeliveryAvailability,
+            }
+          : {}),
+        ...(options.deliveryWoltUrl !== undefined
+          ? { deliveryWoltUrl: options.deliveryWoltUrl }
+          : {}),
+        ...(options.deliveryTenBisUrl !== undefined
+          ? { deliveryTenBisUrl: options.deliveryTenBisUrl }
+          : {}),
+        ...(options.deliveryMishlohaUrl !== undefined
+          ? { deliveryMishlohaUrl: options.deliveryMishlohaUrl }
+          : {}),
+        ...(options.deliveryStatusConfirmedByAdmin !== undefined
+          ? { deliveryStatusConfirmedByAdmin: options.deliveryStatusConfirmedByAdmin }
+          : {}),
+        ...(options.deliveryStatusCheckedAt !== undefined
+          ? { deliveryStatusCheckedAt: options.deliveryStatusCheckedAt }
+          : {}),
+      },
     });
     return;
   } catch (err) {
@@ -332,7 +333,7 @@ export async function updatePlaceDeliveryStatusSafe(options: {
   }
   if (options.deliveryStatusCheckedAt !== undefined) {
     push(
-      `"deliveryStatusCheckedAt" = ?`,
+      `"deliveryStatusCheckedAt" = ?::timestamp`,
       options.deliveryStatusCheckedAt
         ? options.deliveryStatusCheckedAt.toISOString()
         : null
