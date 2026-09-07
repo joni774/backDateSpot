@@ -58,6 +58,21 @@ function extractUrls(html: string): string[] {
   return [...urls];
 }
 
+function isWoltVenueUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    if (!u.hostname.endsWith("wolt.com")) return false;
+    const path = u.pathname.toLowerCase();
+    if (path.includes("gift-card") || path.includes("/discovery") || path.includes("/help")) {
+      return false;
+    }
+    // Real venue pages look like /he/isr/<city>/restaurant/<slug> or /venue/
+    return path.includes("/restaurant/") || path.includes("/venue/");
+  } catch {
+    return false;
+  }
+}
+
 function extractJsonBlobNames(html: string): Array<{ name: string; url?: string }> {
   const out: Array<{ name: string; url?: string }> = [];
   // Common SSR patterns: "name":"...", "title":"..."
@@ -110,32 +125,35 @@ export async function matchWoltListing(options: {
       };
     }
     const html = await res.text();
+    const venueUrls = extractUrls(html).filter(isWoltVenueUrl);
     const blobs = extractJsonBlobNames(html);
+
+    // Require a real venue deep-link — never city hubs / gift-card / discovery.
     for (const item of blobs) {
       if (!namesMatch(item.name, options.nameHe, options.nameEn)) continue;
       const url =
-        item.url && item.url.includes("wolt.com")
-          ? item.url
-          : extractUrls(html).find(
-              (u) =>
-                u.includes("/restaurant/") ||
-                u.includes("/venue/") ||
-                u.includes("wolt.com/he/isr")
-            ) ?? discoveryUrl;
+        (item.url && isWoltVenueUrl(item.url) ? item.url : null) ??
+        venueUrls.find((u) => {
+          const slug = decodeURIComponent(u.split("/").pop() ?? "").replace(/-/g, " ");
+          return namesMatch(slug, options.nameHe, options.nameEn);
+        }) ??
+        null;
+      if (!url) continue;
       return { status: "AVAILABLE", url, confidence: 0.75, reason: "name_match" };
     }
 
     // Heuristic: restaurant deep-links in HTML containing normalized tokens
     const tokens = normalizeName(query).split(" ").filter((t) => t.length > 2);
-    const restaurantUrls = extractUrls(html).filter(
-      (u) => u.includes("wolt.com") && (u.includes("/restaurant/") || u.includes("/venue/"))
-    );
-    for (const url of restaurantUrls) {
+    // Short / generic names (e.g. "Go") produce too many false positives.
+    if (tokens.length === 0 || normalizeName(query).length < 4) {
+      return { status: "UNKNOWN", url: null, confidence: 0.1, reason: "name_too_short" };
+    }
+    for (const url of venueUrls) {
       const slug = decodeURIComponent(url.split("/").pop() ?? "").replace(/-/g, " ");
       if (namesMatch(slug, options.nameHe, options.nameEn)) {
         return { status: "AVAILABLE", url, confidence: 0.65, reason: "slug_match" };
       }
-      if (tokens.length > 0 && tokens.every((t) => slug.includes(t))) {
+      if (tokens.length >= 2 && tokens.every((t) => slug.includes(t))) {
         return { status: "AVAILABLE", url, confidence: 0.55, reason: "slug_tokens" };
       }
     }
@@ -194,12 +212,21 @@ export async function checkDeliveryAvailabilityForPlace(place: {
     matchMishlohaListing(place),
   ]);
 
-  // Prefer existing admin URLs when matcher is uncertain
-  if (place.deliveryWoltUrl && wolt.status !== "AVAILABLE") {
+  // Prefer existing admin URLs when matcher is uncertain — but only if the URL looks real.
+  if (
+    place.deliveryWoltUrl &&
+    isWoltVenueUrl(place.deliveryWoltUrl) &&
+    wolt.status !== "AVAILABLE"
+  ) {
     wolt.status = "AVAILABLE";
     wolt.url = place.deliveryWoltUrl;
     wolt.confidence = Math.max(wolt.confidence, 0.9);
     wolt.reason = "existing_url";
+  } else if (place.deliveryWoltUrl && !isWoltVenueUrl(place.deliveryWoltUrl) && wolt.status !== "AVAILABLE") {
+    // Drop false-positive city/gift hubs left by earlier matcher versions.
+    wolt.status = "UNKNOWN";
+    wolt.url = null;
+    wolt.reason = "invalid_existing_url";
   }
   if (place.deliveryTenBisUrl && tenbis.status !== "AVAILABLE") {
     tenbis.status = "AVAILABLE";

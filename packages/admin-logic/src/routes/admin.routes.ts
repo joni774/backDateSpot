@@ -52,27 +52,46 @@ async function ensureDeliveryAvailabilitySchema(): Promise<void> {
   await prisma.$executeRawUnsafe(`
     DELETE FROM "PlaceLead" WHERE "type"::text = 'DELIVERY_CIBUS';
   `);
-  // Backfill existing URLs as AVAILABLE (safe to re-run)
+  // Clear false-positive Wolt hubs (city / gift-card) from early matcher runs.
+  await prisma.$executeRawUnsafe(`
+    UPDATE "Place"
+    SET
+      "deliveryWoltUrl" = NULL,
+      "deliveryWoltStatus" = 'UNKNOWN'::"DeliveryAvailability",
+      "deliveryStatusConfirmedByAdmin" = false
+    WHERE "deliveryWoltUrl" IS NOT NULL
+      AND "deliveryWoltUrl" NOT ILIKE '%/restaurant/%'
+      AND "deliveryWoltUrl" NOT ILIKE '%/venue/%';
+  `);
+  // One-shot backfill for places never auto-checked: treat hand-entered URLs as AVAILABLE.
+  // Do NOT re-run after matcher writes (would resurrect false-positive URLs).
   await prisma.$executeRawUnsafe(`
     UPDATE "Place"
     SET
       "deliveryWoltStatus" = CASE
-        WHEN "deliveryWoltUrl" IS NOT NULL AND TRIM("deliveryWoltUrl") <> '' THEN 'AVAILABLE'::"DeliveryAvailability"
+        WHEN "deliveryStatusCheckedAt" IS NULL
+          AND "deliveryWoltUrl" IS NOT NULL AND TRIM("deliveryWoltUrl") <> ''
+        THEN 'AVAILABLE'::"DeliveryAvailability"
         ELSE "deliveryWoltStatus"
       END,
       "deliveryTenBisStatus" = CASE
-        WHEN "deliveryTenBisUrl" IS NOT NULL AND TRIM("deliveryTenBisUrl") <> '' THEN 'AVAILABLE'::"DeliveryAvailability"
+        WHEN "deliveryStatusCheckedAt" IS NULL
+          AND "deliveryTenBisUrl" IS NOT NULL AND TRIM("deliveryTenBisUrl") <> ''
+        THEN 'AVAILABLE'::"DeliveryAvailability"
         ELSE "deliveryTenBisStatus"
       END,
       "deliveryMishlohaStatus" = CASE
-        WHEN "deliveryMishlohaUrl" IS NOT NULL AND TRIM("deliveryMishlohaUrl") <> '' THEN 'AVAILABLE'::"DeliveryAvailability"
+        WHEN "deliveryStatusCheckedAt" IS NULL
+          AND "deliveryMishlohaUrl" IS NOT NULL AND TRIM("deliveryMishlohaUrl") <> ''
+        THEN 'AVAILABLE'::"DeliveryAvailability"
         ELSE "deliveryMishlohaStatus"
       END,
       "deliveryStatusConfirmedByAdmin" = CASE
-        WHEN
+        WHEN "deliveryStatusCheckedAt" IS NULL AND (
           ("deliveryWoltUrl" IS NOT NULL AND TRIM("deliveryWoltUrl") <> '')
           OR ("deliveryTenBisUrl" IS NOT NULL AND TRIM("deliveryTenBisUrl") <> '')
           OR ("deliveryMishlohaUrl" IS NOT NULL AND TRIM("deliveryMishlohaUrl") <> '')
+        )
         THEN true
         ELSE "deliveryStatusConfirmedByAdmin"
       END;
@@ -138,11 +157,11 @@ async function fetchUnbilledLeadStatsSafe(): Promise<{ count: number; revenue: n
 }
 
 const optionalUrl = z
-  .string()
+  .union([z.string(), z.null()])
   .optional()
   .transform((v) => {
-    if (!v || !v.trim()) return null;
-    return v.trim();
+    if (v == null || !String(v).trim()) return null;
+    return String(v).trim();
   })
   .refine((v) => v == null || /^https?:\/\//i.test(v), { message: "Invalid URL" });
 
