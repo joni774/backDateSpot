@@ -35,6 +35,7 @@ export {
   persistPlacePhotoCache,
   materializeImagesToCloudinary,
   materializePlaceImagesToCloudinary,
+  hasPersistablePhotoImages,
   FOOD_CATEGORIES,
   type PlaceImageFetchResult,
 } from "./place-image-sources";
@@ -42,12 +43,26 @@ export {
   isCloudinaryConfigured,
   isCloudinaryUrl,
 } from "./cloudinary-storage";
-export { findPlacesSafe, findPlaceByIdSafe, findPlacesByIdsSafe, incrementPlaceViewCountSafe, updatePlaceOpeningHoursSafe, updatePlacePhotoCacheSafe, updatePlaceKosherSafe } from "./place-query-safe";
+export { findPlacesSafe, findPlaceByIdSafe, findPlacesByIdsSafe, incrementPlaceViewCountSafe, updatePlaceOpeningHoursSafe, updatePlacePhotoCacheSafe, updatePlaceKosherSafe, updatePlaceDeliveryStatusSafe } from "./place-query-safe";
 export { detectKosherFromText, detectKosherFromOsmTag, mergeKosherDetections, isFoodPlace, type KosherStatus, type KosherDetection } from "./kosher.util";
 export {
   stockImageForCategory,
   servePlacePhotoByIndex,
 } from "./place-photo-serve";
+export {
+  checkDeliveryAvailabilityForPlace,
+  persistDeliveryCheckResult,
+  resolveDeliveryProviders,
+  placeNeedsDeliveryCheck,
+  isFoodDeliveryCategory,
+  matchWoltListing,
+  matchTenBisListing,
+  matchMishlohaListing,
+  type DeliveryPlatformId,
+  type DeliveryMatchResult,
+  type PlaceDeliveryCheckResult,
+  type ResolvedDeliveryProviders,
+} from "./delivery-availability";
 export {
   getWoltDriveConfig,
   getWoltAccessToken,

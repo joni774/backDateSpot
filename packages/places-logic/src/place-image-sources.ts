@@ -238,6 +238,14 @@ export function needsGooglePhoto(images: string[]): boolean {
   return true;
 }
 
+export function hasPersistablePhotoImages(images: string[]): boolean {
+  return (
+    images.some(isCloudinaryUrl) ||
+    images.some((url) => decodeGooglePhotoRef(url)) ||
+    images.some((url) => isDirectImageUrl(url) && !isGenericStockUrl(url))
+  );
+}
+
 /** Upload Google refs / remote URLs to Cloudinary and return durable https URLs. */
 export async function materializeImagesToCloudinary(
   placeId: string,
@@ -332,6 +340,9 @@ export async function materializePlaceImagesToCloudinary(place: {
 
   const refreshed = resolved.refs.map(encodeGooglePhotoRef);
   images = await materializeImagesToCloudinary(place.id, refreshed, apiKey);
+  if (!images.some(isCloudinaryUrl)) {
+    images = refreshed;
+  }
   return {
     images,
     googlePlaceId: resolved.googlePlaceId,

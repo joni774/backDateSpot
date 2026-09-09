@@ -22,10 +22,23 @@ export type LeadType =
   | "NAVIGATE"
   | "DELIVERY_WOLT"
   | "DELIVERY_TENBIS"
-  | "DELIVERY_MISHLOHA"
-  | "DELIVERY_CIBUS";
+  | "DELIVERY_MISHLOHA";
+
+export type DeliveryAvailability = "UNKNOWN" | "AVAILABLE" | "NOT_AVAILABLE";
 
 export type Language = "he" | "en" | "ar";
+
+export interface ResolvedDeliveryProvider {
+  available: boolean;
+  url: string | null;
+  status: DeliveryAvailability;
+}
+
+export interface ResolvedDeliveryProviders {
+  wolt: ResolvedDeliveryProvider;
+  tenbis: ResolvedDeliveryProvider;
+  mishloha: ResolvedDeliveryProvider;
+}
 
 export interface PlaceListItem {
   id: string;
@@ -44,6 +57,13 @@ export interface PlaceListItem {
   phone?: string | null;
   kosherStatus?: KosherStatus;
   kosherCertification?: string | null;
+  delivery?: ResolvedDeliveryProviders;
+  deliveryWoltUrl?: string | null;
+  deliveryTenBisUrl?: string | null;
+  deliveryMishlohaUrl?: string | null;
+  deliveryWoltStatus?: DeliveryAvailability;
+  deliveryTenBisStatus?: DeliveryAvailability;
+  deliveryMishlohaStatus?: DeliveryAvailability;
 }
 
 export interface PlaceDetail extends PlaceListItem {
@@ -58,7 +78,10 @@ export interface PlaceDetail extends PlaceListItem {
   deliveryWoltUrl?: string | null;
   deliveryTenBisUrl?: string | null;
   deliveryMishlohaUrl?: string | null;
-  deliveryCibusUrl?: string | null;
+  delivery?: ResolvedDeliveryProviders;
+  deliveryWoltStatus?: DeliveryAvailability;
+  deliveryTenBisStatus?: DeliveryAvailability;
+  deliveryMishlohaStatus?: DeliveryAvailability;
   isOpen: boolean;
   isSaved: boolean;
   isFavorite?: boolean;

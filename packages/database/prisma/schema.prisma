@@ -50,7 +50,13 @@ enum LeadType {
   DELIVERY_WOLT
   DELIVERY_TENBIS
   DELIVERY_MISHLOHA
-  DELIVERY_CIBUS
+}
+
+/// Whether a place is listed on a delivery marketplace (manual or auto-matched).
+enum DeliveryAvailability {
+  UNKNOWN
+  AVAILABLE
+  NOT_AVAILABLE
 }
 
 enum LeadInvoiceStatus {
@@ -136,7 +142,11 @@ model Place {
   deliveryWoltUrl     String?
   deliveryTenBisUrl   String?
   deliveryMishlohaUrl String?
-  deliveryCibusUrl    String?
+  deliveryWoltStatus     DeliveryAvailability @default(UNKNOWN)
+  deliveryTenBisStatus   DeliveryAvailability @default(UNKNOWN)
+  deliveryMishlohaStatus DeliveryAvailability @default(UNKNOWN)
+  deliveryStatusCheckedAt      DateTime?
+  deliveryStatusConfirmedByAdmin Boolean @default(false)
   isActive       Boolean       @default(true)
   displayOrder   Int           @default(0)
   viewCount      Int           @default(0)

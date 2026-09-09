@@ -7,9 +7,112 @@ import {
   PriceRange,
   LeadType,
 } from "@datespot/database";
-import { placeCategorySchema, fetchPlaceImages, needsGooglePhoto, stockImageForCategory, persistPlacePhotoCache, FOOD_CATEGORIES, findPlacesSafe, materializePlaceImagesToCloudinary, isCloudinaryConfigured, isCloudinaryUrl, googlePlacesSleep } from "@datespot/places-logic";
+import { placeCategorySchema, fetchPlaceImages, needsGooglePhoto, stockImageForCategory, persistPlacePhotoCache, FOOD_CATEGORIES, findPlacesSafe, findPlaceByIdSafe, materializePlaceImagesToCloudinary, hasPersistablePhotoImages, isCloudinaryConfigured, isCloudinaryUrl, googlePlacesSleep, detectKosherFromText, isFoodPlace, updatePlaceKosherSafe, checkDeliveryAvailabilityForPlace, persistDeliveryCheckResult, placeNeedsDeliveryCheck, isFoodDeliveryCategory } from "@datespot/places-logic";
 import { noopAdminCacheHooks, type AdminCacheHooks } from "../cache";
 import { createLeadBillingProcessor } from "../utils/lead-billing.util";
+
+/** Idempotent — safe when production DB missed the Prisma migration deploy. */
+async function ensureKosherSchema(): Promise<void> {
+  await prisma.$executeRawUnsafe(`
+    DO $$ BEGIN
+      CREATE TYPE "KosherStatus" AS ENUM ('UNKNOWN', 'NONE', 'PARTIAL', 'STRICT');
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$;
+  `);
+  await prisma.$executeRawUnsafe(`
+    ALTER TABLE "Place" ADD COLUMN IF NOT EXISTS "kosherStatus" "KosherStatus" NOT NULL DEFAULT 'UNKNOWN';
+  `);
+  await prisma.$executeRawUnsafe(`
+    ALTER TABLE "Place" ADD COLUMN IF NOT EXISTS "kosherCertification" TEXT;
+  `);
+}
+
+/** Idempotent delivery availability columns + Cibus purge leftovers. */
+async function ensureDeliveryAvailabilitySchema(): Promise<void> {
+  await prisma.$executeRawUnsafe(`
+    DO $$ BEGIN
+      CREATE TYPE "DeliveryAvailability" AS ENUM ('UNKNOWN', 'AVAILABLE', 'NOT_AVAILABLE');
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$;
+  `);
+  await prisma.$executeRawUnsafe(`
+    ALTER TABLE "Place"
+      ADD COLUMN IF NOT EXISTS "deliveryWoltUrl" TEXT,
+      ADD COLUMN IF NOT EXISTS "deliveryTenBisUrl" TEXT,
+      ADD COLUMN IF NOT EXISTS "deliveryMishlohaUrl" TEXT,
+      ADD COLUMN IF NOT EXISTS "deliveryWoltStatus" "DeliveryAvailability" NOT NULL DEFAULT 'UNKNOWN',
+      ADD COLUMN IF NOT EXISTS "deliveryTenBisStatus" "DeliveryAvailability" NOT NULL DEFAULT 'UNKNOWN',
+      ADD COLUMN IF NOT EXISTS "deliveryMishlohaStatus" "DeliveryAvailability" NOT NULL DEFAULT 'UNKNOWN',
+      ADD COLUMN IF NOT EXISTS "deliveryStatusCheckedAt" TIMESTAMP(3),
+      ADD COLUMN IF NOT EXISTS "deliveryStatusConfirmedByAdmin" BOOLEAN NOT NULL DEFAULT false;
+  `);
+  await prisma.$executeRawUnsafe(`
+    ALTER TABLE "Place" DROP COLUMN IF EXISTS "deliveryCibusUrl";
+  `);
+  await prisma.$executeRawUnsafe(`
+    DELETE FROM "PlaceLead" WHERE "type"::text = 'DELIVERY_CIBUS';
+  `);
+  // Clear false-positive Wolt hubs (city / gift-card) from early matcher runs.
+  await prisma.$executeRawUnsafe(`
+    UPDATE "Place"
+    SET
+      "deliveryWoltUrl" = NULL,
+      "deliveryWoltStatus" = 'UNKNOWN'::"DeliveryAvailability",
+      "deliveryStatusConfirmedByAdmin" = false
+    WHERE "deliveryWoltUrl" IS NOT NULL
+      AND "deliveryWoltUrl" NOT ILIKE '%/restaurant/%'
+      AND "deliveryWoltUrl" NOT ILIKE '%/venue/%';
+  `);
+  // One-shot backfill for places never auto-checked: treat hand-entered URLs as AVAILABLE.
+  // Do NOT re-run after matcher writes (would resurrect false-positive URLs).
+  await prisma.$executeRawUnsafe(`
+    UPDATE "Place"
+    SET
+      "deliveryWoltStatus" = CASE
+        WHEN "deliveryStatusCheckedAt" IS NULL
+          AND "deliveryWoltUrl" IS NOT NULL AND TRIM("deliveryWoltUrl") <> ''
+        THEN 'AVAILABLE'::"DeliveryAvailability"
+        ELSE "deliveryWoltStatus"
+      END,
+      "deliveryTenBisStatus" = CASE
+        WHEN "deliveryStatusCheckedAt" IS NULL
+          AND "deliveryTenBisUrl" IS NOT NULL AND TRIM("deliveryTenBisUrl") <> ''
+        THEN 'AVAILABLE'::"DeliveryAvailability"
+        ELSE "deliveryTenBisStatus"
+      END,
+      "deliveryMishlohaStatus" = CASE
+        WHEN "deliveryStatusCheckedAt" IS NULL
+          AND "deliveryMishlohaUrl" IS NOT NULL AND TRIM("deliveryMishlohaUrl") <> ''
+        THEN 'AVAILABLE'::"DeliveryAvailability"
+        ELSE "deliveryMishlohaStatus"
+      END,
+      "deliveryStatusConfirmedByAdmin" = CASE
+        WHEN "deliveryStatusCheckedAt" IS NULL AND (
+          ("deliveryWoltUrl" IS NOT NULL AND TRIM("deliveryWoltUrl") <> '')
+          OR ("deliveryTenBisUrl" IS NOT NULL AND TRIM("deliveryTenBisUrl") <> '')
+          OR ("deliveryMishlohaUrl" IS NOT NULL AND TRIM("deliveryMishlohaUrl") <> '')
+        )
+        THEN true
+        ELSE "deliveryStatusConfirmedByAdmin"
+      END;
+  `);
+}
+
+type KosherEnrichRow = {
+  id: string;
+  nameHe: string;
+  nameEn: string;
+  nameAr: string;
+  category: string;
+  kosherStatus: string | null;
+};
+
+async function loadPlacesForKosherEnrich(): Promise<KosherEnrichRow[]> {
+  return prisma.$queryRawUnsafe<KosherEnrichRow[]>(
+    `SELECT id, "nameHe", "nameEn", "nameAr", "category"::text AS category, "kosherStatus"::text AS "kosherStatus"
+     FROM "Place" WHERE "isActive" = true ORDER BY id`
+  );
+}
 
 async function countPlacesByCategorySafe(): Promise<Record<PlaceCategory, number>> {
   const rows = await prisma.$queryRawUnsafe<Array<{ category: string; count: number }>>(
@@ -54,11 +157,11 @@ async function fetchUnbilledLeadStatsSafe(): Promise<{ count: number; revenue: n
 }
 
 const optionalUrl = z
-  .string()
+  .union([z.string(), z.null()])
   .optional()
   .transform((v) => {
-    if (!v || !v.trim()) return null;
-    return v.trim();
+    if (v == null || !String(v).trim()) return null;
+    return String(v).trim();
   })
   .refine((v) => v == null || /^https?:\/\//i.test(v), { message: "Invalid URL" });
 
@@ -93,7 +196,10 @@ const placeBodySchema = z.object({
   deliveryWoltUrl: optionalUrl,
   deliveryTenBisUrl: optionalUrl,
   deliveryMishlohaUrl: optionalUrl,
-  deliveryCibusUrl: optionalUrl,
+  deliveryWoltStatus: z.enum(["UNKNOWN", "AVAILABLE", "NOT_AVAILABLE"]).optional(),
+  deliveryTenBisStatus: z.enum(["UNKNOWN", "AVAILABLE", "NOT_AVAILABLE"]).optional(),
+  deliveryMishlohaStatus: z.enum(["UNKNOWN", "AVAILABLE", "NOT_AVAILABLE"]).optional(),
+  deliveryStatusConfirmedByAdmin: z.boolean().optional(),
   isActive: z.boolean().optional(),
   displayOrder: z.number().int().optional(),
   leadFeeAgorot: z.number().int().min(0).optional(),
@@ -231,7 +337,21 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
         return;
       }
 
-      const place = await prisma.place.update({ where: { id }, data: body });
+      const confirmingDelivery =
+        body.deliveryWoltStatus != null ||
+        body.deliveryTenBisStatus != null ||
+        body.deliveryMishlohaStatus != null ||
+        body.deliveryStatusConfirmedByAdmin === true;
+
+      const place = await prisma.place.update({
+        where: { id },
+        data: {
+          ...body,
+          ...(confirmingDelivery
+            ? { deliveryStatusConfirmedByAdmin: true }
+            : {}),
+        },
+      });
       await cache.onPlacesMutated?.();
       res.json(place);
     } catch (err) {
@@ -371,16 +491,21 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
 
   router.post("/enrich-photos", async (req, res) => {
     try {
-      const limit = Math.min(15, Math.max(1, parseInt(String(req.body?.limit ?? req.query.limit ?? "10"), 10)));
+      const limit = Math.min(25, Math.max(1, parseInt(String(req.body?.limit ?? req.query.limit ?? "10"), 10)));
       const offset = Math.max(0, parseInt(String(req.body?.offset ?? req.query.offset ?? "0"), 10));
+      const foodOnly =
+        String(req.body?.foodOnly ?? req.query.foodOnly ?? "false").toLowerCase() === "true";
 
       const places = await findPlacesSafe({ orderBy: { id: "asc" } });
-      const slice = places.slice(offset, offset + limit);
-      const pending = slice.filter((place) => needsGooglePhoto(place.images));
+      const candidates = places.filter((place) => {
+        if (foodOnly && !FOOD_CATEGORIES.has(place.category)) return false;
+        return needsGooglePhoto(place.images);
+      });
+      const pending = candidates.slice(offset, offset + limit);
 
       let updated = 0;
       let skipped = 0;
-      const details: Array<{ name: string; result: "updated" | "skipped" }> = [];
+      const details: Array<{ name: string; result: "updated" | "skipped"; reason?: string }> = [];
 
       for (const place of pending) {
         try {
@@ -395,6 +520,7 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
             images: place.images,
           });
 
+          // Only Cloudinary counts as durable success — gpl: alone is not done.
           if (materialized.images.some(isCloudinaryUrl)) {
             await persistPlacePhotoCache({
               placeId: place.id,
@@ -402,7 +528,8 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
               googlePlaceId: materialized.googlePlaceId ?? place.googlePlaceId ?? undefined,
             });
             updated += 1;
-            details.push({ name: place.nameHe, result: "updated" });
+            details.push({ name: place.nameHe, result: "updated", reason: "cloudinary" });
+            await googlePlacesSleep(250);
             continue;
           }
 
@@ -418,7 +545,8 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
 
           if (fetched.images.length === 0) {
             skipped += 1;
-            details.push({ name: place.nameHe, result: "skipped" });
+            details.push({ name: place.nameHe, result: "skipped", reason: "no_source" });
+            await googlePlacesSleep(250);
             continue;
           }
 
@@ -427,36 +555,221 @@ export function createAdminRouter(config: AdminRouterConfig): Router {
             images: fetched.images,
             googlePlaceId: fetched.googlePlaceId,
           });
-          updated += 1;
-          details.push({ name: place.nameHe, result: "updated" });
+
+          // persistPlacePhotoCache materializes; treat http(s) non-gpl as usable too.
+          const durable =
+            fetched.images.some(isCloudinaryUrl) ||
+            fetched.images.some(
+              (url) => /^https?:\/\//i.test(url) && !url.startsWith("gpl:")
+            );
+          if (durable || hasPersistablePhotoImages(fetched.images)) {
+            // Re-materialize once to prefer Cloudinary URLs in DB when possible.
+            const uploaded = await materializePlaceImagesToCloudinary({
+              id: place.id,
+              nameHe: place.nameHe,
+              nameEn: place.nameEn,
+              latitude: place.latitude,
+              longitude: place.longitude,
+              address: place.address,
+              googlePlaceId: fetched.googlePlaceId ?? place.googlePlaceId,
+              images: fetched.images,
+            });
+            if (uploaded.images.some(isCloudinaryUrl)) {
+              await persistPlacePhotoCache({
+                placeId: place.id,
+                images: uploaded.images,
+                googlePlaceId: uploaded.googlePlaceId ?? fetched.googlePlaceId,
+              });
+              updated += 1;
+              details.push({ name: place.nameHe, result: "updated", reason: "fetched_cloudinary" });
+            } else if (fetched.images.some((url) => /^https?:\/\//i.test(url))) {
+              updated += 1;
+              details.push({ name: place.nameHe, result: "updated", reason: "fetched_https" });
+            } else {
+              skipped += 1;
+              details.push({ name: place.nameHe, result: "skipped", reason: "still_gpl" });
+            }
+          } else {
+            skipped += 1;
+            details.push({ name: place.nameHe, result: "skipped", reason: "not_durable" });
+          }
         } catch (err) {
           console.warn(`[admin] enrich-photos failed for ${place.nameHe}:`, err);
           skipped += 1;
-          details.push({ name: place.nameHe, result: "skipped" });
+          details.push({ name: place.nameHe, result: "skipped", reason: "error" });
         }
         await googlePlacesSleep(250);
       }
 
       await cache.onPlacesMutated?.();
 
-      const stillNeeding = places.filter((place) => needsGooglePhoto(place.images)).length - updated;
       const nextOffset = offset + limit;
 
       res.json({
         totalPlaces: places.length,
+        candidates: candidates.length,
+        foodOnly,
+        cloudinaryConfigured: isCloudinaryConfigured(),
         offset,
         nextOffset,
-        done: nextOffset >= places.length,
-        sliceSize: slice.length,
+        done: nextOffset >= candidates.length,
+        sliceSize: pending.length,
         candidatesInSlice: pending.length,
         updated,
         skipped,
-        stillNeedingPhotos: Math.max(0, stillNeeding),
+        stillNeedingPhotos: Math.max(0, candidates.length - updated),
         details,
       });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: "Failed to enrich photos" });
+    }
+  });
+
+  router.post("/places/:id/delivery-check", async (req, res) => {
+    try {
+      await ensureDeliveryAvailabilitySchema();
+      const id = z.string().uuid().parse(req.params.id);
+      const place = await findPlaceByIdSafe(id);
+      if (!place) {
+        res.status(404).json({ error: "Place not found" });
+        return;
+      }
+
+      const result = await checkDeliveryAvailabilityForPlace(place);
+      await persistDeliveryCheckResult(place.id, result);
+      await cache.onPlacesMutated?.();
+
+      const refreshed = await findPlaceByIdSafe(id);
+      res.json({ place: refreshed, result });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        res.status(400).json({ error: "Invalid place id" });
+        return;
+      }
+      console.error("[admin] delivery-check single failed:", err);
+      res.status(500).json({
+        error: "Failed to check delivery availability",
+        detail: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  router.post("/delivery-check", async (req, res) => {
+    try {
+      await ensureDeliveryAvailabilitySchema();
+      const limit = Math.min(
+        25,
+        Math.max(1, parseInt(String(req.body?.limit ?? req.query.limit ?? "10"), 10))
+      );
+      const offset = Math.max(
+        0,
+        parseInt(String(req.body?.offset ?? req.query.offset ?? "0"), 10)
+      );
+      const foodOnly =
+        String(req.body?.foodOnly ?? req.query.foodOnly ?? "true").toLowerCase() !==
+        "false";
+      const onlyUnknown =
+        String(req.body?.onlyUnknown ?? req.query.onlyUnknown ?? "true").toLowerCase() !==
+        "false";
+
+      const places = await findPlacesSafe({ orderBy: { id: "asc" } });
+      const candidates = places.filter((place) => {
+        if (foodOnly && !isFoodDeliveryCategory(place.category)) return false;
+        if (onlyUnknown) return placeNeedsDeliveryCheck(place);
+        return isFoodDeliveryCategory(place.category);
+      });
+      const pending = candidates.slice(offset, offset + limit);
+
+      let updated = 0;
+      let skipped = 0;
+      const details: Array<{
+        name: string;
+        wolt: string;
+        tenbis: string;
+        mishloha: string;
+      }> = [];
+
+      for (const place of pending) {
+        try {
+          const result = await checkDeliveryAvailabilityForPlace(place);
+          await persistDeliveryCheckResult(place.id, result);
+          updated += 1;
+          details.push({
+            name: place.nameHe,
+            wolt: result.wolt.status,
+            tenbis: result.tenbis.status,
+            mishloha: result.mishloha.status,
+          });
+        } catch (err) {
+          console.warn(`[admin] delivery-check failed for ${place.nameHe}:`, err);
+          skipped += 1;
+        }
+        await googlePlacesSleep(200);
+      }
+
+      await cache.onPlacesMutated?.();
+      const nextOffset = offset + limit;
+      res.json({
+        totalPlaces: places.length,
+        candidates: candidates.length,
+        foodOnly,
+        onlyUnknown,
+        offset,
+        nextOffset,
+        done: nextOffset >= candidates.length,
+        sliceSize: pending.length,
+        updated,
+        skipped,
+        details,
+      });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Failed to batch-check delivery availability" });
+    }
+  });
+
+  router.post("/enrich-kosher", async (_req, res) => {
+    try {
+      await ensureKosherSchema();
+      const places = await loadPlacesForKosherEnrich();
+      let updated = 0;
+      let skipped = 0;
+      const details: Array<{ name: string; status: string; certification: string | null }> = [];
+
+      for (const place of places) {
+        if ((place.kosherStatus ?? "UNKNOWN") !== "UNKNOWN" || !isFoodPlace(place.category)) {
+          skipped += 1;
+          continue;
+        }
+        const detected = detectKosherFromText(place.nameHe, place.nameEn, place.nameAr);
+        if (detected.status === "UNKNOWN") {
+          skipped += 1;
+          continue;
+        }
+        await updatePlaceKosherSafe(place.id, detected);
+        updated += 1;
+        details.push({
+          name: place.nameHe,
+          status: detected.status,
+          certification: detected.certification,
+        });
+      }
+
+      await cache.onPlacesMutated?.();
+
+      res.json({
+        totalPlaces: places.length,
+        updated,
+        skipped,
+        details: details.slice(0, 50),
+      });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({
+        error: "Failed to enrich kosher status",
+        message: err instanceof Error ? err.message : String(err),
+      });
     }
   });
 

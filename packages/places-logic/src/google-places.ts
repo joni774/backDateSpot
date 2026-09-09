@@ -74,11 +74,11 @@ type PhotoLookup = {
 };
 
 export function getGooglePlacesApiKey(): string | undefined {
-  return (
-    process.env.GOOGLE_PLACES_API_KEY ||
-    process.env.GOOGLE_MAPS_API_KEY ||
-    undefined
-  );
+  const raw =
+    process.env.GOOGLE_PLACES_API_KEY || process.env.GOOGLE_MAPS_API_KEY || "";
+  // Railway / .env sometimes stores values with wrapping quotes — those make Google return REQUEST_DENIED.
+  const trimmed = raw.trim().replace(/^["']|["']$/g, "").trim();
+  return trimmed || undefined;
 }
 
 export function encodeGooglePhotoRef(ref: string): string {

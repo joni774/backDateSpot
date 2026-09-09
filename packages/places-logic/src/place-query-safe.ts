@@ -1,8 +1,9 @@
-import { prisma, PlaceCategory, PriceRange, KosherStatus, type Place } from "@datespot/database";
+import { prisma, PlaceCategory, PriceRange, KosherStatus, DeliveryAvailability, type Place } from "@datespot/database";
 import { type KosherDetection } from "./kosher.util";
 
 const VALID_CATEGORIES = new Set<string>(Object.values(PlaceCategory));
 const VALID_PRICE_RANGES = new Set<string>(Object.values(PriceRange));
+const VALID_DELIVERY_STATUSES = new Set(["UNKNOWN", "AVAILABLE", "NOT_AVAILABLE"]);
 
 type PlaceWhere = {
   isActive?: boolean;
@@ -23,6 +24,12 @@ function normalizeKosherStatus(value: unknown): KosherStatus {
   const raw = String(value ?? "UNKNOWN");
   if (VALID_KOSHER_STATUSES.has(raw)) return raw as KosherStatus;
   return KosherStatus.UNKNOWN;
+}
+
+function normalizeDeliveryStatus(value: unknown): DeliveryAvailability {
+  const raw = String(value ?? "UNKNOWN");
+  if (VALID_DELIVERY_STATUSES.has(raw)) return raw as DeliveryAvailability;
+  return DeliveryAvailability.UNKNOWN;
 }
 
 function normalizePriceRange(value: unknown): PriceRange {
@@ -65,7 +72,16 @@ function mapRawPlaceRow(row: Record<string, unknown>): Place | null {
     deliveryTenBisUrl: row.deliveryTenBisUrl == null ? null : String(row.deliveryTenBisUrl),
     deliveryMishlohaUrl:
       row.deliveryMishlohaUrl == null ? null : String(row.deliveryMishlohaUrl),
-    deliveryCibusUrl: row.deliveryCibusUrl == null ? null : String(row.deliveryCibusUrl),
+    deliveryWoltStatus: normalizeDeliveryStatus(row.deliveryWoltStatus),
+    deliveryTenBisStatus: normalizeDeliveryStatus(row.deliveryTenBisStatus),
+    deliveryMishlohaStatus: normalizeDeliveryStatus(row.deliveryMishlohaStatus),
+    deliveryStatusCheckedAt:
+      row.deliveryStatusCheckedAt instanceof Date
+        ? row.deliveryStatusCheckedAt
+        : row.deliveryStatusCheckedAt
+          ? new Date(String(row.deliveryStatusCheckedAt))
+          : null,
+    deliveryStatusConfirmedByAdmin: row.deliveryStatusConfirmedByAdmin === true,
     isActive: row.isActive !== false,
     displayOrder: Number(row.displayOrder ?? 0),
     viewCount: Number(row.viewCount ?? 0),
@@ -229,6 +245,106 @@ export async function updatePlacePhotoCacheSafe(options: {
 
   await prisma.$executeRawUnsafe(
     `UPDATE "Place" SET "images" = $1::text[]${googleClause} WHERE "id" = $${params.length}`,
+    ...params
+  );
+}
+
+export async function updatePlaceDeliveryStatusSafe(options: {
+  placeId: string;
+  deliveryWoltStatus?: DeliveryAvailability | string;
+  deliveryTenBisStatus?: DeliveryAvailability | string;
+  deliveryMishlohaStatus?: DeliveryAvailability | string;
+  deliveryWoltUrl?: string | null;
+  deliveryTenBisUrl?: string | null;
+  deliveryMishlohaUrl?: string | null;
+  deliveryStatusConfirmedByAdmin?: boolean;
+  deliveryStatusCheckedAt?: Date | null;
+}): Promise<void> {
+  try {
+    await prisma.place.update({
+      where: { id: options.placeId },
+      data: {
+        ...(options.deliveryWoltStatus != null
+          ? { deliveryWoltStatus: String(options.deliveryWoltStatus) as DeliveryAvailability }
+          : {}),
+        ...(options.deliveryTenBisStatus != null
+          ? { deliveryTenBisStatus: String(options.deliveryTenBisStatus) as DeliveryAvailability }
+          : {}),
+        ...(options.deliveryMishlohaStatus != null
+          ? {
+              deliveryMishlohaStatus: String(
+                options.deliveryMishlohaStatus
+              ) as DeliveryAvailability,
+            }
+          : {}),
+        ...(options.deliveryWoltUrl !== undefined
+          ? { deliveryWoltUrl: options.deliveryWoltUrl }
+          : {}),
+        ...(options.deliveryTenBisUrl !== undefined
+          ? { deliveryTenBisUrl: options.deliveryTenBisUrl }
+          : {}),
+        ...(options.deliveryMishlohaUrl !== undefined
+          ? { deliveryMishlohaUrl: options.deliveryMishlohaUrl }
+          : {}),
+        ...(options.deliveryStatusConfirmedByAdmin !== undefined
+          ? { deliveryStatusConfirmedByAdmin: options.deliveryStatusConfirmedByAdmin }
+          : {}),
+        ...(options.deliveryStatusCheckedAt !== undefined
+          ? { deliveryStatusCheckedAt: options.deliveryStatusCheckedAt }
+          : {}),
+      },
+    });
+    return;
+  } catch (err) {
+    console.warn("[places] prisma delivery status update failed, trying raw:", err);
+  }
+
+  const sets: string[] = [];
+  const params: unknown[] = [];
+
+  const push = (clause: string, value: unknown) => {
+    params.push(value);
+    sets.push(clause.replace("?", `$${params.length}`));
+  };
+
+  if (options.deliveryWoltStatus != null) {
+    push(`"deliveryWoltStatus" = ?::"DeliveryAvailability"`, String(options.deliveryWoltStatus));
+  }
+  if (options.deliveryTenBisStatus != null) {
+    push(`"deliveryTenBisStatus" = ?::"DeliveryAvailability"`, String(options.deliveryTenBisStatus));
+  }
+  if (options.deliveryMishlohaStatus != null) {
+    push(
+      `"deliveryMishlohaStatus" = ?::"DeliveryAvailability"`,
+      String(options.deliveryMishlohaStatus)
+    );
+  }
+  if (options.deliveryWoltUrl !== undefined) {
+    push(`"deliveryWoltUrl" = ?`, options.deliveryWoltUrl);
+  }
+  if (options.deliveryTenBisUrl !== undefined) {
+    push(`"deliveryTenBisUrl" = ?`, options.deliveryTenBisUrl);
+  }
+  if (options.deliveryMishlohaUrl !== undefined) {
+    push(`"deliveryMishlohaUrl" = ?`, options.deliveryMishlohaUrl);
+  }
+  if (options.deliveryStatusConfirmedByAdmin !== undefined) {
+    push(`"deliveryStatusConfirmedByAdmin" = ?`, options.deliveryStatusConfirmedByAdmin);
+  }
+  if (options.deliveryStatusCheckedAt !== undefined) {
+    push(
+      `"deliveryStatusCheckedAt" = ?::timestamp`,
+      options.deliveryStatusCheckedAt
+        ? options.deliveryStatusCheckedAt.toISOString()
+        : null
+    );
+  }
+
+  if (sets.length === 0) return;
+
+  params.push(options.placeId);
+  await prisma.$executeRawUnsafe(
+    `UPDATE "Place" SET ${sets.join(", ")} WHERE "id" = $${params.length}`,
     ...params
   );
 }
